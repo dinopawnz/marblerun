@@ -106,6 +106,8 @@ def deck_piece(i, t0, y0, t1, y1):
     # the walkable solid (not on the steep lift)
     if C.KIND[i] != "lift":
         for q in range(n):
+            if C.KIND[i] == "drop" and ts[q] < 16:
+                continue
             bot = [rp(i, ts[q], -HALF, ys[q] - DECK_T), rp(i, ts[q + 1], -HALF, ys[q + 1] - DECK_T), rp(i, ts[q + 1], HALF, ys[q + 1] - DECK_T), rp(i, ts[q], HALF, ys[q] - DECK_T)]
             top = [(p[0], p[1] + DECK_T, p[2]) for p in bot]
             col_solid(bot, top)
@@ -124,7 +126,7 @@ def rail_shape(w, h):
 SH = rail_shape(RAIL_W, RAIL_H)
 
 
-def rail_along(points, m, sprout=True, seed=0, glow=None):
+def rail_along(points, m, sprout=True, seed=0, glow=None, solid=True):
     """a crystal wall along a list of points (MML), crystal shards sprouting from it now and then"""
     rings = []
     for q, p in enumerate(points):
@@ -134,8 +136,8 @@ def rail_along(points, m, sprout=True, seed=0, glow=None):
         nx, nz = -tz / L, tx / L
         rings.append([(p[0] + nx * sx, p[1] + sy, p[2] + nz * sx) for sx, sy in SH])
     track.tube(rings, m, vrep=len(points) / 3, urep=1, cap0=m, cap1=m)
-    # the walkable solid
-    for q in range(len(points) - 1):
+    # the walkable solid (none round the bowls: a marble riding high on the bank would reach it)
+    for q in range(len(points) - 1 if solid else 0):
         a, b = points[q], points[q + 1]
         tx, tz = b[0] - a[0], b[2] - a[2]
         L = math.hypot(tx, tz) or 1
@@ -212,13 +214,13 @@ for j in range(C.N):
     # the crystal rail round the rim (no solid on the bowl itself: it would reach into a marble's room)
     rim = [C.corner_point(c, math.pi / 2 * qa / (NA * 2), R + RAIL_W / 2) for qa in range(NA * 2 + 1)]
     rim = [(p[0], C.corner_point(c, math.pi / 2 * qa / (NA * 2), R)[1], p[2]) for qa, p in enumerate(rim)]
-    rail_along(rim, ms["cryp"] if j % 2 else ms["cry"], seed=j * 7)
+    rail_along(rim, ms["cryp"] if j % 2 else ms["cry"], seed=j * 7, solid=False)
     glow_line(rim, "c%d" % j, 9.0)
     # pillars under the bowl
     for a, r in ((math.pi / 4, 0.3 * R), (math.pi / 4, 0.72 * R), (0.3, 0.6 * R), (math.pi / 2 - 0.3, 0.6 * R), (math.pi / 4, 0.95 * R)):
         p = C.corner_point(c, a, r, -1.2 - 1.6 * (1 - r / R) ** 0.5)
         pillar_spots = globals().setdefault("PILLARS", [])
-        pillar_spots.append((p[0], p[2], p[1] + 0.2, 1.2))
+        pillar_spots.append((p[0], p[2], p[1] + 0.2, 1.2, False))
 
 
 # ---------------------------------------------------------------- living pillars
@@ -231,10 +233,10 @@ for (i, t0, y0, t1, y1) in pieces:
         t = t0 + 4 + (t1 - t0 - 8) * q / max(1, n)
         y = y0 + (y1 - y0) * (t - t0) / (t1 - t0) - 3.0
         p = rp(i, t, 0, y)
-        PILLARS.append((p[0], p[2], y + 0.1, 1.0 if C.KIND[i] != "lift" else 0.9))
+        PILLARS.append((p[0], p[2], y + 0.1, 1.0 if C.KIND[i] != "lift" else 0.9, True))
 
 
-def pillar(x, z, top, s=1.0, seed=0):
+def pillar(x, z, top, s=1.0, seed=0, solid=True):
     """a living pillar: a root flare, a twisting trunk with glowing veins, opening into a cradle of boughs"""
     if top < 3:
         return
@@ -252,12 +254,13 @@ def pillar(x, z, top, s=1.0, seed=0):
         a = k / 3 * 6.283 + r.random()
         rp_ = [(x + math.sin(a) * (1.5 + 3.5 * f) * s, 1.2 * (1 - f) ** 2 + 0.05, z + math.cos(a) * (1.5 + 3.5 * f) * s) for f in (q / 6 for q in range(7))]
         struct.sweep(rp_, [(0.5 * s * math.cos(k2 / 6 * 6.283), 0.5 * s * math.sin(k2 / 6 * 6.283)) for k2 in range(6)], ms["bark"], scale=[1 - 0.8 * q / 6 for q in range(7)])
-    colm.tube([[(x + 1.2 * math.sin(k / 8 * 6.283), 0, z + 1.2 * math.cos(k / 8 * 6.283)) for k in range(8)],
-               [(x + 1.2 * math.sin(k / 8 * 6.283), top, z + 1.2 * math.cos(k / 8 * 6.283)) for k in range(8)]], CM, cap0=CM, cap1=CM)
+    if solid:          # (only up to well below the deck)
+        colm.tube([[(x + 1.2 * math.sin(k / 8 * 6.283), 0, z + 1.2 * math.cos(k / 8 * 6.283)) for k in range(8)],
+                   [(x + 1.2 * math.sin(k / 8 * 6.283), top - 2, z + 1.2 * math.cos(k / 8 * 6.283)) for k in range(8)]], CM, cap0=CM, cap1=CM)
 
 
-for k, (x, z, top, s) in enumerate(PILLARS):
-    pillar(x, z, top, s, seed=k)
+for k, (x, z, top, s, sol) in enumerate(PILLARS):
+    pillar(x, z, top, s, seed=k, solid=sol)
 
 
 # ---------------------------------------------------------------- the features on each run
