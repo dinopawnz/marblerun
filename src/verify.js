@@ -76,7 +76,7 @@ console.log("at load:", JSON.stringify(tags));
 const visPrims = live().filter((n) => /^M-(CUBE|CYLINDER|SPHERE|PLANE)$/.test(n.tagName) && n.attrs.visible !== "false");
 ok(visPrims.length === 0, "no plain shapes anybody can see (" + visPrims.length + ")");
 ok((tags["M-LABEL"] || 0) <= 30, "live text labels: " + (tags["M-LABEL"] || 0));
-ok((tags["M-MODEL"] || 0) > 0 && live().filter((n) => n.tagName === "M-MODEL" && !/raw\.githubusercontent\.com\/dinopawnz\/marblerun\/v1\/models\/mr_.*\.glb\.gz$/.test(n.attrs.src)).length === 0, "every model loads from the marblerun repo (" + tags["M-MODEL"] + ")");
+ok((tags["M-MODEL"] || 0) > 0 && live().filter((n) => n.tagName === "M-MODEL" && !/raw\.githubusercontent\.com\/dinopawnz\/marblerun\/3f2df73a4c20bd0a85b32436e6c19c77a88c145b\/models\/mr_.*\.glb\.gz$/.test(n.attrs.src)).length === 0, "every model loads from the marblerun repo (" + tags["M-MODEL"] + ")");
 
 // ---------- fairness ----------
 const wins = new Array(8).fill(0); let winFirst = 0, maxBehind = 0, maxLastWait = 0, sumLen = 0;
