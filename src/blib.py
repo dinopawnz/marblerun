@@ -163,7 +163,7 @@ class Mesh:
             return (c[0] + x * cy + z * sy, c[1] + y, c[2] - x * sy + z * cy)
         hw, hh, t = w / 2, h / 2, thick / 2
         if frame:
-            self.box((c[0], c[1], c[2]), (w + 0.6, h + 0.6, thick * 0.8), frame, yaw=yaw)
+            self.box((c[0], c[1], c[2]), (w + 0.6, h + 0.6, min(thick * 0.4, max(0.0, thick - 0.2))), frame, yaw=yaw)
         front = [P(-hw, -hh, t), P(hw, -hh, t), P(hw, hh, t), P(-hw, hh, t)]
         self.face(front, material, uv=[(0, 0), (1, 0), (1, 1), (0, 1)], out=P(0, 0, -5))
         if two:

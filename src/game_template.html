@@ -30,6 +30,13 @@
   To CANCEL: type the code twice within 10 s. The marbles go straight
   home; anyone inside drops out onto the track (harmless).
 
+  HOST REMOTE (marble_run_remote.html, PIN = RACE_CODE)
+  Start / cancel races, change the boarding time, run races back to
+  back on their own (AUTO), switch the kiosks off so only you can start
+  races, put a message on the scoreboards, and watch who is in which
+  marble and the live order. It types "<code> <command>" into the
+  hidden prompt "mr-host"; answers come back on the group "mr-remote".
+
   HOW IT MOVES (the lessons from Ride Lab 2/3, Sky Dragon, Gravity Well)
   - Every marble moves in ONE dated glide per stretch, each glide in a
     group of its own, all made when boarding starts - long before they
@@ -64,8 +71,9 @@
   // ==========================================================
   // TUNING
   // ==========================================================
-  const RACE_CODE = "2468";        // start a race. Twice within 10 s cancels one.
-  const BOARD_SECONDS = 20;        // time to get into a marble
+  const RACE_CODE = "2468";        // start a race. Twice within 10 s cancels one. Also the host remote's PIN.
+  const BOARD_SECONDS = 20;        // time to get into a marble (the host remote can change it)
+  const AUTO_GAP_SECONDS = 30;     // auto races: the wait between one race ending and the next boarding
   const CLOSE_SECONDS = 3;         // doors shut this long before the lift moves
   const LIFT_SECONDS = 30;         // the ride up the lift hill
   const RACE_SPEED = 10;           // m/s, a marble's average rolling speed
@@ -79,7 +87,7 @@
   const CANCEL_WINDOW = 10000;
   const LIGHT = 1;
 
-  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/3f2df73a4c20bd0a85b32436e6c19c77a88c145b/models/";   // pinned to one upload: never an old copy
+  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/1dbe4ecb9581c8ba320bf29fd5bf0c2edcf673b8/models/";   // pinned to one upload: never an old copy
   const M = (n) => BASE + n + ".glb.gz";
 
   // the course, built in Blender from the same numbers (course.py in the repo)
@@ -162,6 +170,7 @@
   // Each glide group carries the dated animations of one stretch and nothing
   // else. Before its start time a glide shows 0, after it the whole stretch.
   let marbles = [], obstacles = [];
+  const RIDERS = [];              // per marble: who is standing in it (connection id -> last seen)
   function hexSide(i) {
     const a = i * 60, r = a * Math.PI / 180, rc = 2.6 + 0.5;
     return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP + 7.2) / 2, ry: a, width: 2 * 3.6 * Math.tan(Math.PI / 6) + 0.1, height: 6, depth: 1 };
@@ -184,7 +193,11 @@
     // the part riders are in: level, never turned
     const pod = el("m-group", {}, g);
     el("m-model", { src: M("mr_pod_" + COURSE.names[k].toLowerCase()), "cast-shadows": "false" }, pod);
-    el("m-cylinder", Object.assign({}, SOLID, { y: FLOOR_TOP - 0.2, radius: 2.8, height: 0.4 }), pod);
+    const floor = el("m-cylinder", Object.assign({}, SOLID, { y: FLOOR_TOP - 0.2, radius: 2.8, height: 0.4, "collision-interval": 1000 }), pod);
+    const seen = RIDERS[k] = new Map();         // who is standing in this marble (for the host remote)
+    const touch = (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.set(id, Date.now()); };
+    on(floor, "collisionstart", touch); on(floor, "collisionmove", touch);
+    on(floor, "collisionend", (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.delete(id); });
     for (let i = 0; i < 6; i++) if (i !== 3) solid(hexSide(i), pod);
     solid({ y: 7.5, width: 7.4, height: 0.6, depth: 7.4 }, pod);
     // the glass: faces the way it is going and rolls
@@ -296,7 +309,7 @@
 
   function makePlan() {
     const now = Date.now(), d0 = docNow();
-    const tLift = now + (BOARD_SECONDS + CLOSE_SECONDS) * 1000;
+    const tLift = now + (HOST.board + CLOSE_SECONDS) * 1000;
     const winner = Math.floor(Math.random() * N) % N;      // 1 in N, every race
     // Everyone's luck is rolled the same way. The drawn winner then swaps
     // luck with one of the three luckiest, so it reaches the last gates near
@@ -421,12 +434,14 @@
   // GAME FLOW
   // ==========================================================
   let phase = "IDLE";     // IDLE | BOARDING | RACE
+  const HOST = { board: BOARD_SECONDS, auto: false, gap: AUTO_GAP_SECONDS, kiosks: true, nextAt: 0, nextT: 0 };
   let plan = null, timers = [], cancelArmedUntil = 0;
   function at(t, fn) { timers.push(later(fn, t - Date.now())); }
   function clearTimers() { timers.forEach((h) => clearTimeout(h)); timers = []; }
 
   function startRace() {
     clearTimers();
+    clearTimeout(HOST.nextT); HOST.nextAt = 0;
     plan = makePlan();
     phase = "BOARDING";
     rebuild(plan);
@@ -459,6 +474,7 @@
       setDoors(false);
       setBridge(true);
       paintBoards();
+      if (HOST.auto) queueAuto(HOST.gap * 1000);
     });
     paintBoards();
   }
@@ -479,15 +495,134 @@
     cancelArmedUntil = now + CANCEL_WINDOW;
     notice("CODE AGAIN TO CANCEL", CANCEL_WINDOW);
   }
-  // race control: an invisible box over each kiosk, inside the code prompt
+  // race control: a see-through box over each kiosk, inside the code prompt.
+  // (it must be drawn to be clicked: visible="false" makes it unclickable, opacity 0 doesn't)
+  const HIT = { color: "#ffffff", opacity: 0, "cast-shadows": "false", collide: "false" };
   [-1, 1].forEach((sd) => {
     const wrap = el("m-prompt", { message: "Race code", placeholder: "code" });
-    el("m-cube", { x: sd * (COURSE.half + 12), y: 2.2, z: -5, width: 5.2, height: 3.4, depth: 4.2, color: "#000000", visible: "false", collide: "false" }, wrap);
+    el("m-cube", Object.assign({ x: sd * (COURSE.half + 12), y: 2.2, z: -5, width: 5.2, height: 3.4, depth: 4.2 }, HIT), wrap);
     on(wrap, "prompt", (e) => {
       const typed = String((e && e.detail && e.detail.value) || "").replace(/[^0-9]/g, "");
-      if (typed === RACE_CODE) codeEntered();          // anything else: nothing happens
+      if (typed !== RACE_CODE) return;                 // anything else: nothing happens
+      if (!HOST.kiosks) { notice("RACE CONTROL IS OFF", 4000); return; }
+      codeEntered();
     });
   });
+
+  // ==========================================================
+  // HOST REMOTE - marble_run_remote.html types "<code> <command>" into this prompt
+  // and reads the answers off the board below (only remotes ever receive it)
+  // ==========================================================
+  const PARK = -500;
+  const hostPrompt = el("m-prompt", { id: "mr-host", message: "Host code + command", placeholder: "code + command", x: 0, y: PARK, z: 0 });
+  const remoteBoard = el("m-group", { id: "mr-remote", y: PARK, "visible-to": "-1" });
+  const ONLINE = new Set(), REMOTES = new Set();
+  const ack = { n: 0, l: [] };
+  function hostMsg(t) {
+    t = String(t); ack.n++; ack.l.push({ n: ack.n, t }); if (ack.l.length > 12) ack.l.shift();
+    remoteBoard.setAttribute("data-ack", JSON.stringify({ n: ack.n, t, l: ack.l }));
+    paintRemote();
+  }
+  function riders(k) {
+    const m = RIDERS[k]; if (!m) return 0;
+    let n = 0;                     // (players standing still send no "move" events, so no time-out: a step off sends "end")
+    m.forEach((t, id) => { if (!ONLINE.has(id)) m.delete(id); else n++; });
+    return n;
+  }
+  function paintRemote() {
+    if (!REMOTES.size) return;
+    const t = Date.now();
+    const P = plan;
+    let ph = "idle";
+    if (phase === "BOARDING") ph = "boarding";
+    else if (phase === "RACE") ph = P && P.announced ? "finished" : t < P.tRace ? "lift" : "race";
+    const order = P && t >= P.tRace ? standings(t) : null;
+    const g = {
+      now: t, ph, ev: ack.l.length ? ack.l[ack.l.length - 1].t : "",
+      board: HOST.board, auto: HOST.auto, gap: HOST.gap, kiosks: HOST.kiosks, nextAt: HOST.nextAt || 0,
+      online: ONLINE.size, errors: scriptErrors, lastError,
+      closeAt: P ? P.tLift - CLOSE_SECONDS * 1000 : 0, liftAt: P ? P.tLift : 0, raceAt: P ? P.tRace : 0, endAt: P ? P.end : 0,
+      winner: P && P.announced ? COURSE.names[P.winner] : "",
+      cancelArmed: t < cancelArmedUntil,
+      marbles: COURSE.names.map((n, k) => ({
+        n, c: COURSE.colors[k], riders: riders(k),
+        pos: order ? order.indexOf(k) + 1 : 0,
+        done: !!(P && t >= P.m[k].finish && t >= P.tRace),
+        gap: P && order && t >= P.m[k].finish ? Math.round(P.m[k].finish - P.m[order[0]].finish) : null,
+      })),
+    };
+    remoteBoard.setAttribute("data-game", JSON.stringify(g));
+  }
+  every(paintRemote, 1000);
+  function hostCommand(cmd, parts, rest) {
+    if (cmd === "start") {
+      if (phase !== "IDLE") return "A RACE IS ALREADY ON";
+      cancelArmedUntil = 0; startRace(); return "RACE STARTED - BOARDING FOR " + HOST.board + " S";
+    }
+    if (cmd === "cancel" || cmd === "stop") {
+      if (phase === "IDLE") { if (HOST.nextAt) { clearTimeout(HOST.nextT); HOST.nextAt = 0; return "NEXT AUTO RACE CALLED OFF"; } return "NO RACE TO CANCEL"; }
+      cancelRace(); return "RACE CANCELLED - EVERYONE BACK IN THE STATION";
+    }
+    if (cmd === "board") {
+      const v = parseInt(parts[1], 10);
+      if (!(v >= 10 && v <= 120)) return "BOARDING TIME MUST BE 10 TO 120 S";
+      HOST.board = v; return "BOARDING TIME " + v + " S" + (phase === "BOARDING" ? " (FROM THE NEXT RACE)" : "");
+    }
+    if (cmd === "auto") {
+      const a = (parts[1] || "").toLowerCase();
+      HOST.auto = a === "on" ? true : a === "off" ? false : !HOST.auto;
+      if (!HOST.auto && HOST.nextAt) { clearTimeout(HOST.nextT); HOST.nextAt = 0; }
+      if (HOST.auto && phase === "IDLE" && !HOST.nextAt) queueAuto(5000);
+      return HOST.auto ? "AUTO RACES ON - A NEW RACE " + HOST.gap + " S AFTER EACH ONE" : "AUTO RACES OFF";
+    }
+    if (cmd === "gap") {
+      const v = parseInt(parts[1], 10);
+      if (!(v >= 10 && v <= 600)) return "THE GAP MUST BE 10 TO 600 S";
+      HOST.gap = v; return "AUTO GAP " + v + " S";
+    }
+    if (cmd === "kiosks") {
+      const a = (parts[1] || "").toLowerCase();
+      HOST.kiosks = a === "on" ? true : a === "off" ? false : !HOST.kiosks;
+      return HOST.kiosks ? "RACE CONTROL KIOSKS ON" : "RACE CONTROL KIOSKS OFF - ONLY THE REMOTE STARTS RACES";
+    }
+    if (cmd === "say") {
+      const text = rest.slice(3).trim().toUpperCase().replace(/[^A-Z0-9 !?.,'&:+-]/g, "").slice(0, 28);
+      if (!text) return "SAY WHAT? TRY: SAY GOOD LUCK";
+      notice(text, 10000); return "ON THE BOARDS: " + text;
+    }
+    if (cmd === "status") {
+      return (phase === "IDLE" ? "WAITING" : phase) + " - " + ONLINE.size + " ONLINE - AUTO " + (HOST.auto ? "ON" : "OFF");
+    }
+    return null;
+  }
+  on(hostPrompt, "prompt", (e) => {
+    const raw = String((e && e.detail && e.detail.value) || "").replace(/\s+/g, " ").trim();
+    if (raw.indexOf(RACE_CODE) !== 0) { hostMsg("WRONG CODE"); return; }
+    const rest = raw.slice(RACE_CODE.length).trim();
+    const parts = rest.split(" ").filter(Boolean);
+    const cmd = (parts[0] || "").toLowerCase();
+    const id = e.detail.connectionId;
+    if (cmd === "remote") {
+      if (id === undefined) { hostMsg("REMOTE: NO CONNECTION ID"); return; }
+      REMOTES.add(id); ONLINE.delete(id); remoteBoard.setAttribute("visible-to", Array.from(REMOTES).join(" "));
+      hostMsg("UNLOCKED"); return;
+    }
+    let reply = null;
+    try { reply = hostCommand(cmd, parts, rest); } catch (err) { reply = "ERROR: " + (err && err.message); }
+    hostMsg(reply || "UNKNOWN: " + (cmd || "(nothing)") + " - TRY: START, CANCEL, AUTO, BOARD 30");
+  });
+  window.addEventListener("connected", guard((e) => { if (e.detail && !REMOTES.has(e.detail.connectionId)) ONLINE.add(e.detail.connectionId); }));
+  window.addEventListener("disconnected", guard((e) => {
+    const c = e.detail && e.detail.connectionId;
+    ONLINE.delete(c);
+    RIDERS.forEach((m) => m && m.delete(c));
+    if (REMOTES.delete(c)) remoteBoard.setAttribute("visible-to", REMOTES.size ? Array.from(REMOTES).join(" ") : "-1");
+  }));
+  function queueAuto(ms) {
+    clearTimeout(HOST.nextT);
+    HOST.nextAt = Date.now() + ms;
+    HOST.nextT = later(() => { HOST.nextAt = 0; if (HOST.auto && phase === "IDLE") { startRace(); hostMsg("AUTO: NEW RACE - BOARDING"); } }, ms);
+  }
 
   every(paintBoards, 2000);
   rebuild(null);

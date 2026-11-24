@@ -19,12 +19,13 @@ const roots = { world: new El("m-group"), race: new El("m-group") };
 ROOT.append(roots.world); ROOT.append(roots.race);
 const all = [];
 const document = { createElement(t) { const e = new El(t); all.push(e); return e; }, getElementById: (i) => roots[i], timeline: { get currentTime() { return clock - 5_000_000 + 1000; } } };
-const ctx = { document, Date: { now: () => clock }, Math, String, Number, Object, Array, JSON, Infinity, isFinite, console,
+const win = new El("window");
+const ctx = { window: win, document, Date: { now: () => clock }, Math, String, Number, Object, Array, JSON, Infinity, isFinite, console,
   setInterval(f, ms) { timers.push({ f, ms, next: clock + ms, rep: true, id: ++tid }); return tid; },
   setTimeout(f, ms) { timers.push({ f, ms, next: clock + ms, rep: false, id: ++tid }); return tid; },
   clearTimeout(id) { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); }, clearInterval() {} };
 vm.createContext(ctx);
-vm.runInContext(script + ";globalThis.X={get plan(){return plan},get phase(){return phase},marbles:()=>marbles,makePlan,COURSE,WORLD,boards,get errs(){return scriptErrors+' '+lastError},progress,bridge,EASE};", ctx);
+vm.runInContext(script + ";globalThis.X={get plan(){return plan},get phase(){return phase},marbles:()=>marbles,makePlan,COURSE,WORLD,boards,get errs(){return scriptErrors+' '+lastError},progress,bridge,EASE,HOST,get REMOTES(){return REMOTES},RIDERS};", ctx);
 const X = ctx.X, C = X.COURSE;
 function advance(ms) {
   const end = clock + ms;
@@ -73,10 +74,10 @@ function deckTop(x, z) {
 // counts at load
 const tags = {}; live().forEach((n) => tags[n.tagName] = (tags[n.tagName] || 0) + 1);
 console.log("at load:", JSON.stringify(tags));
-const visPrims = live().filter((n) => /^M-(CUBE|CYLINDER|SPHERE|PLANE)$/.test(n.tagName) && n.attrs.visible !== "false");
+const visPrims = live().filter((n) => /^M-(CUBE|CYLINDER|SPHERE|PLANE)$/.test(n.tagName) && n.attrs.visible !== "false" && n.attrs.opacity !== "0");
 ok(visPrims.length === 0, "no plain shapes anybody can see (" + visPrims.length + ")");
 ok((tags["M-LABEL"] || 0) <= 30, "live text labels: " + (tags["M-LABEL"] || 0));
-ok((tags["M-MODEL"] || 0) > 0 && live().filter((n) => n.tagName === "M-MODEL" && !/raw\.githubusercontent\.com\/dinopawnz\/marblerun\/3f2df73a4c20bd0a85b32436e6c19c77a88c145b\/models\/mr_.*\.glb\.gz$/.test(n.attrs.src)).length === 0, "every model loads from the marblerun repo (" + tags["M-MODEL"] + ")");
+ok((tags["M-MODEL"] || 0) > 0 && live().filter((n) => n.tagName === "M-MODEL" && !/raw\.githubusercontent\.com\/dinopawnz\/marblerun\/[0-9a-f]{40}\/models\/mr_.*\.glb\.gz$/.test(n.attrs.src)).length === 0, "every model loads from the marblerun repo (" + tags["M-MODEL"] + ")");
 
 // ---------- fairness ----------
 const wins = new Array(8).fill(0); let winFirst = 0, maxBehind = 0, maxLastWait = 0, sumLen = 0;
@@ -150,5 +151,58 @@ wrap.fire("prompt", { value: "2468" }); advance(40000); wrap.fire("prompt", { va
 ok(X.phase === "RACE", "one extra code entry does not cancel");
 wrap.fire("prompt", { value: "2468" }); advance(500);
 ok(X.phase === "IDLE" && animsNow() === 0, "the code twice cancels, everything home");
+
+// ---------- clicks: anything players click must be drawn (visible="false" can't be clicked) ----------
+const hidden = (n) => { for (; n; n = n.parentNode) if (n.attrs && n.attrs.visible === "false") return true; return false; };
+const prompts = live().filter((n) => n.tagName === "M-PROMPT" && n.attrs.id !== "mr-host");
+const targets = []; prompts.forEach((p) => { const w = (n) => { if (n !== p) targets.push(n); n.children.forEach(w); }; w(p); });
+ok(prompts.length === 2 && targets.length >= 2 && targets.every((t) => !hidden(t)), "the RACE CONTROL click boxes are drawn see-through, so they can be clicked (" + targets.length + ")");
+ok(targets.every((t) => t.attrs.opacity === "0"), "and nobody can see them (opacity 0)");
+
+// ---------- the host remote ----------
+const host = live().find((n) => n.attrs.id === "mr-host"), board = live().find((n) => n.attrs.id === "mr-remote");
+ok(host && host.tagName === "M-PROMPT" && board && board.attrs["visible-to"] === "-1", "hidden host prompt + remote board (seen by nobody yet)");
+const acks = () => JSON.parse(board.attrs["data-ack"] || '{"t":""}').t;
+const game = () => JSON.parse(board.attrs["data-game"] || "{}");
+win.fire("connected", { connectionId: 3 }); win.fire("connected", { connectionId: 4 }); win.fire("connected", { connectionId: 9 });
+host.fire("prompt", { value: "1111 remote", connectionId: 9 });
+ok(acks() === "WRONG CODE" && board.attrs["visible-to"] === "-1", "a wrong PIN doesn't unlock");
+host.fire("prompt", { value: "2468 remote", connectionId: 9 });
+ok(acks() === "UNLOCKED" && board.attrs["visible-to"] === "9", "the right PIN unlocks, and only the remote sees the board");
+advance(1100);
+let g = game();
+ok(g.ph === "idle" && g.online === 2 && g.marbles.length === 8 && g.board === 20, "the board reports the game (" + g.ph + ", " + g.online + " online)");
+host.fire("prompt", { value: "2468 board 30", connectionId: 9 });
+ok(X.HOST.board === 30, "BOARD 30 sets the boarding time: " + acks());
+host.fire("prompt", { value: "2468 kiosks off", connectionId: 9 });
+wrap.fire("prompt", { value: "2468" }); advance(100);
+ok(X.phase === "IDLE", "kiosks off: the kiosk code no longer starts a race");
+host.fire("prompt", { value: "2468 kiosks on", connectionId: 9 });
+host.fire("prompt", { value: "2468 start", connectionId: 9 });
+ok(X.phase === "BOARDING" && X.plan.tLift - clock === 33000, "START from the remote boards for 30 s: " + acks());
+// riders: two players step into marble 2
+const floorOf = (k) => X.marbles()[k].pod.children.find((c) => c.tagName === "M-CYLINDER");
+floorOf(2).fire("collisionstart", { connectionId: 3 }); floorOf(2).fire("collisionstart", { connectionId: 4 });
+advance(1100);
+g = game();
+ok(g.ph === "boarding" && g.marbles[2].riders === 2 && g.marbles.reduce((a, m) => a + m.riders, 0) === 2, "the remote sees 2 riders in " + g.marbles[2].n);
+floorOf(2).fire("collisionend", { connectionId: 4 }); advance(1100);
+ok(game().marbles[2].riders === 1, "one steps out: 1 rider");
+ok(!game().winner, "the remote is never told the winner before the line");
+host.fire("prompt", { value: "2468 auto on", connectionId: 9 });
+ok(X.HOST.auto, "AUTO ON: " + acks());
+advance(X.plan.end - clock + 1000);
+ok(X.phase === "IDLE" && game().nextAt > clock, "race over: the next auto race is queued");
+advance(X.HOST.gap * 1000 + 100);
+ok(X.phase === "BOARDING", "the next race boards by itself");
+host.fire("prompt", { value: "2468 say good luck!", connectionId: 9 }); advance(100);
+ok(X.boards[0][0]._t === "GOOD LUCK!", "SAY puts a message on the scoreboards");
+host.fire("prompt", { value: "2468 auto off", connectionId: 9 });
+host.fire("prompt", { value: "2468 cancel", connectionId: 9 }); advance(500);
+ok(X.phase === "IDLE" && animsNow() === 0 && !X.HOST.auto, "CANCEL from the remote: everything home");
+host.fire("prompt", { value: "2468 dance", connectionId: 9 });
+ok(/^UNKNOWN/.test(acks()), "an unknown command says so");
+win.fire("disconnected", { connectionId: 9 });
+ok(board.attrs["visible-to"] === "-1", "the remote leaves: nobody sees the board");
 ok(X.errs.startsWith("0 "), "no script errors (" + X.errs + ")");
 console.log(fails ? fails + " FAILED" : "ALL PASSED");

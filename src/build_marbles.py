@@ -39,12 +39,12 @@ def pod(name, color):
     col = mat("col_" + name, color, 0.35, emit=0.3)
     m.prism((0, 0, 0), C.FLOOR_TOP and 2.8, 0.3, glassf, n=32, y0=C.FLOOR_TOP - 0.3)
     # rim
-    m.prism((0, 0, 0), 2.95, 0.12, gold, n=32, y0=C.FLOOR_TOP - 0.36)
+    m.prism((0, 0, 0), 2.95, 0.26, gold, n=32, y0=C.FLOOR_TOP - 0.5)
     # name on the floor, read from inside
     png = text_png("floor_" + name.lower(), name, 512, 512, bg=color, fg="#ffffff", size=110)
     fm = mat("floorname_" + name, "#ffffff", 0.5, image=png, emit=0.3, emit_image=True)
     r = 1.3
-    m.face([(-r, C.FLOOR_TOP + 0.01, r), (r, C.FLOOR_TOP + 0.01, r), (r, C.FLOOR_TOP + 0.01, -r), (-r, C.FLOOR_TOP + 0.01, -r)], fm,
+    m.face([(-r, C.FLOOR_TOP + 0.09, r), (r, C.FLOOR_TOP + 0.09, r), (r, C.FLOOR_TOP + 0.09, -r), (-r, C.FLOOR_TOP + 0.09, -r)], fm,
            uv=[(0, 0), (1, 0), (1, 1), (0, 1)], out=(0, -5, 0))
     # the door frame, facing back (-z)
     for a in (158, 202):
@@ -58,7 +58,7 @@ def pod(name, color):
     m.box((0, y, 0), (6.2, 1.9, 6.2), mat("tagbody", "#10141c", 0.5))
     for yaw in (0, 90, 180, 270):
         cy, sy = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
-        m.sign((3.12 * sy, y, 3.12 * cy), 6.0, 1.5, yaw, tm, two=False, thick=0.02)
+        m.sign((3.2 * sy, y, 3.2 * cy), 6.0, 1.5, yaw, tm, two=False, thick=0.02)
     m.prism((0, 0, 0), 0.5, 0.5, col, n=8, y0=y + 0.95)
     o = m.obj("pod_" + name)
     print(name, "pod tris", tris([o]))
@@ -75,13 +75,13 @@ m = Mesh()
 deck = mat("bridgedeck", "#596577", 0.7)
 gold = mat("gold", "#d9a53b", 0.3, 0.9)
 x0 = C.HALF + 1.0
-m.box((0, 0.9, -4.95), (2 * x0, 0.6, 5.1), deck)
-m.box((0, 1.21, -2.55), (2 * x0, 0.02, 0.3), mat("yellow", "#f2c200", 0.4))
+m.box((0, 0.9, -4.95), (2 * x0, 0.6, 4.9), deck)
+m.box((0, 1.26, -2.55), (2 * x0, 0.12, 0.3), mat("yellow", "#f2c200", 0.4))
 for k in range(C.LANES):
     x = C.lane_off(k)
     png = text_png("bridge_" + C.NAMES[k].lower(), C.NAMES[k], 512, 128, bg="#596577", fg=C.COLORS[k])
     lm = mat("bridge_" + C.NAMES[k], "#ffffff", 0.6, image=png, emit=0.3, emit_image=True)
-    m.face([(x - 3, 1.215, -6.9), (x + 3, 1.215, -6.9), (x + 3, 1.215, -5.4), (x - 3, 1.215, -5.4)], lm,
+    m.face([(x - 3, 1.32, -6.9), (x + 3, 1.32, -6.9), (x + 3, 1.32, -5.4), (x - 3, 1.32, -5.4)], lm,
            uv=[(0, 0), (1, 0), (1, 1), (0, 1)], out=(x, -5, -6))
 # a rail along the back so nobody steps off onto the track behind
 for k in range(17):
@@ -95,7 +95,7 @@ export("mr_bridge", [o])
 reset()
 m = Mesh()
 red = mat("gred", "#d8283a", 0.4, emit=0.2); wht = mat("gwhite", "#eeeeee", 0.4)
-m.box((0, 0.9, 0), (0.9, 1.8, 0.9), mat("gdark", "#343c4a", 0.4, 0.6))
+m.box((0, 0.9, 0), (0.7, 1.8, 0.7), mat("gdark", "#343c4a", 0.4, 0.6))
 for q in range(7):
     m.box((0.45 + 1.1 * (q + 0.5), 1.3, 0), (1.1, 0.7, 0.45), red if q % 2 == 0 else wht)
 o = m.obj("gate"); bevel(o, 0.04)
@@ -107,16 +107,16 @@ m = Mesh()
 org = mat("hatch", "#ff8a1a", 0.45, emit=0.15); blk = mat("hblack", "#16161a", 0.6)
 m.box((0, -0.15, 4.6), (8.6, 0.3, 9.2), org)
 for q in range(5):
-    m.box((0, 0.01, 0.9 + q * 1.9), (8.0, 0.04, 0.5), blk)
+    m.box((0, 0.05, 0.9 + q * 1.9), (8.0, 0.1, 0.5), blk)
 o = m.obj("hatch")
 export("mr_hatch", [o])
 
 # ---------------------------------------------------------------- elevator platform: top at the origin
 reset()
 m = Mesh()
-m.box((0, -0.3, 0), (8.6, 0.6, 8.6), mat("plat", "#f2c200", 0.45))
+# the top sits 10 cm proud of the deck it rests in, so the two never share a plane
+m.box((0, -0.2, 0), (8.6, 0.6, 8.6), mat("plat", "#f2c200", 0.45))
 for sx in (-1, 1):
-    m.box((sx * 4.1, 0.02, 0), (0.4, 0.06, 8.6), mat("pblack", "#16161a", 0.6))
-m.box((0, -0.9, 0), (6, 0.6, 6), mat("pdark", "#343c4a", 0.4, 0.6))
+    m.box((sx * 4.1, 0.16, 0), (0.4, 0.12, 8.6), mat("pblack", "#16161a", 0.6))
 o = m.obj("elev"); bevel(o, 0.04)
 export("mr_elev", [o])
