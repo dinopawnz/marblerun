@@ -73,9 +73,9 @@
   // TUNING
   // ==========================================================
   const RACE_CODE = "2468";        // start a race. Twice within 10 s cancels one. Also the host remote's PIN.
-  const BOARD_SECONDS = 20;        // time to get into a marble (the host remote can change it)
+  const BOARD_SECONDS = 0;         // wait before the doors shut: 0 = the marbles go as soon as a race starts (the remote can add one)
   const AUTO_GAP_SECONDS = 30;     // auto races: the wait between one race ending and the next boarding
-  const CLOSE_SECONDS = 3;         // doors shut this long before the lift moves
+  const CLOSE_SECONDS = 1;         // doors shut this long before the lift moves
   const LIFT_SECONDS = [25, 27.5];  // the ride up the lift hill: each marble's own, at random
   const SIM_TUNE = { gScale: 1.6 };   // the physics (see simulateRace): 1.6 = a lively pace
   const MAX_SPREAD = 80;            // seconds from first to last over the line (races with a bigger gap are re-rolled)
@@ -843,7 +843,7 @@
   function hostCommand(cmd, parts, rest) {
     if (cmd === "start") {
       if (phase !== "IDLE") return "A RACE IS ALREADY ON";
-      cancelArmedUntil = 0; startRace(); return "RACE STARTED - BOARDING FOR " + HOST.board + " S";
+      cancelArmedUntil = 0; startRace(); return HOST.board ? "RACE STARTED - BOARDING FOR " + HOST.board + " S" : "RACE STARTED - THEY'RE OFF!";
     }
     if (cmd === "cancel" || cmd === "stop") {
       if (phase === "IDLE") { if (HOST.nextAt) { clearTimeout(HOST.nextT); HOST.nextAt = 0; return "NEXT AUTO RACE CALLED OFF"; } return "NO RACE TO CANCEL"; }
@@ -851,8 +851,8 @@
     }
     if (cmd === "board") {
       const v = parseInt(parts[1], 10);
-      if (!(v >= 10 && v <= 120)) return "BOARDING TIME MUST BE 10 TO 120 S";
-      HOST.board = v; return "BOARDING TIME " + v + " S" + (phase === "BOARDING" ? " (FROM THE NEXT RACE)" : "");
+      if (!(v >= 0 && v <= 120)) return "BOARDING TIME MUST BE 0 TO 120 S";
+      HOST.board = v; return (v ? "BOARDING TIME " + v + " S" : "NO WAIT - MARBLES GO AT ONCE") + (phase === "BOARDING" ? " (FROM THE NEXT RACE)" : "");
     }
     if (cmd === "auto") {
       const a = (parts[1] || "").toLowerCase();

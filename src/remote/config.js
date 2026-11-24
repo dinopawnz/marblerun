@@ -20,7 +20,7 @@
       ui.startB = R.btn(g, "START A RACE", "opens boarding - players walk into a marble", () => R.say("start"), { cls: "b-go big1" });
       ui.cancelB = R.btn(g, "CANCEL THE RACE", "every marble goes straight home", () => R.say("cancel"), { cls: "b-stop big1",
         confirm: () => (ui.ph === "idle" ? "" : "Cancel this race? The marbles go straight back to the station and anyone inside drops onto the track (harmless).") });
-      R.note(p, ["Press ", { b: "START" }, " and the bridge opens for the boarding time. Then the doors shut and the lift hill carries all eight up. ",
+      R.note(p, ["Press ", { b: "START" }, " and the doors shut and the lift hill carries all eight up straight away (set a boarding time below if people need time to get in). ",
         "A race takes about 4 minutes, start to home. The winner is drawn at random every race - 1 in 8 for every marble."]);
 
       // ---- running it
@@ -30,7 +30,7 @@
       ui.musicB = R.btn(g, "RACE MUSIC: ON", "the music playing inside the marbles", () => R.say(ui.music ? "music off" : "music on"), { cls: "big1" });
       ui.kioskB = R.btn(g, "KIOSKS: ON", "the RACE CONTROL kiosks at the station", () => R.say(ui.kiosks ? "kiosks off" : "kiosks on"), { cls: "big1" });
       ui.gapC = R.choices(p, "Wait between auto races", [[15, "15 s"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [300, "5 min"]], (v) => R.say("gap " + v), (v) => v + " s");
-      ui.boardC = R.choices(p, "Boarding time (how long the bridge is open)", [[10, "10 s"], [20, "20 s"], [30, "30 s"], [45, "45 s"], [60, "1 min"]], (v) => R.say("board " + v), (v) => v + " s");
+      ui.boardC = R.choices(p, "Boarding time (how long the bridge is open)", [[0, "None"], [10, "10 s"], [20, "20 s"], [30, "30 s"], [60, "1 min"]], (v) => R.say("board " + v), (v) => (v ? v + " s" : "none"));
       R.note(p, [{ b: "AUTO RACES ON" }, " = races run back to back on their own until you switch it off. ",
         { b: "KIOSKS OFF" }, " = players can't start races at the station with the code - only you, from here."]);
 
@@ -75,7 +75,7 @@
       ui.bar.style.width = Math.max(0, Math.min(100, frac * 100)) + "%";
       if (G.winner) ui.lastWinner = G.winner;
       const inMarbles = (G.marbles || []).reduce((a, m) => a + (m.riders || 0), 0);
-      setText(ui.st.online, G.online); setText(ui.st.in, inMarbles); setText(ui.st.board, G.board + " s"); setText(ui.st.winner, ui.lastWinner || "-");
+      setText(ui.st.online, G.online); setText(ui.st.in, inMarbles); setText(ui.st.board, G.board ? G.board + " s" : "none"); setText(ui.st.winner, ui.lastWinner || "-");
       R.lit(ui.startB, G.ph === "boarding");
       setText(ui.autoB.lab, "AUTO RACES: " + (G.auto ? "ON" : "OFF")); R.lit(ui.autoB, G.auto);
       ui.music = G.music !== false;
