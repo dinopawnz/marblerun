@@ -21,24 +21,15 @@ def imp(name, loc=(0, 0, 0), yaw=0, rx=0, rz=0):
     return root
 
 imp("mr_ground"); imp("mr_track"); imp("mr_scenery"); imp("mr_bridge")
-lanes = json.load(open("/home/claude/mr/course.json"))["lanes"]
 names = [n.lower() for n in C.NAMES]
-# marbles: four parked in the station, others out on the course
-spots = {0: 0, 1: 0, 2: 3, 3: 6, 4: 7, 5: 9, 6: 10, 7: 0}
+SNAP = sys.argv[sys.argv.index("--") + 1] if "--snap" in sys.argv else None
+snaps = json.load(open("/home/claude/mr/out/snaps.json"))
+which0 = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else ["all"]
+snap = next((w.split("=")[1] for w in which0 if w.startswith("t=")), "64")
 for k in range(8):
-    g = lanes[k][spots[k]]
-    p = g["a"] if spots[k] == 0 else [(g["a"][i] + g["b"][i]) / 2 for i in range(3)]
+    p = snaps[snap][k]
     imp("mr_pod_" + names[k], p)
     imp("mr_ball_" + names[k], (p[0], p[1] + C.MR, p[2]))
-for k in range(8):
-    ga = json.load(open("/home/claude/mr/course.json"))["gates"][k]
-    d = C.D[3]; n = C.normal(d)
-    imp("mr_gate", (ga[0] - n[0] * 4.3, ga[1], ga[2] - n[1] * 4.3), yaw=C.heading_deg(3), rz=0 if k % 2 else 80)
-    tr = json.load(open("/home/claude/mr/course.json"))["traps"][k]
-    d5 = C.D[5]
-    imp("mr_hatch", (tr[0] - d5[0] * 4.6, tr[1], tr[2] - d5[1] * 4.6), yaw=C.heading_deg(5), rx=0 if k % 3 else -80)
-    el = json.load(open("/home/claude/mr/course.json"))["elevs"][k]
-    imp("mr_elev", (el[0], el[1] + (k % 3) * 3, el[2]))
 
 # sky + sun
 w = bpy.data.worlds.new("w"); sc.world = w; w.use_nodes = True
@@ -56,13 +47,15 @@ def shot(name, eye, look, lens=28):
     co.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
     sc.render.filepath = f"/home/claude/mr/preview_{name}.png"
     bpy.ops.render.render(write_still=True)
-which = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else ["all"]
-if "all" in which or "over" in which: shot("overview", (-170, 210, -330), (130, 10, 40), 24)
+which = which0
+def at_snap(k):
+    return snaps[snap][k]
+if "all" in which or "over" in which: shot("overview", (-170, 260, -330), (130, 30, 40), 24)
 if "all" in which or "station" in which: shot("station", (-30, 14, -55), (0, 4, 10), 26)
-if "all" in which or "zig" in which: shot("obstacles", (60, 95, 200), (200, 40, 110), 26)
-if "all" in which or "inside" in which:
-    g = lanes[2][3]; p = [(g["a"][i] + g["b"][i]) / 2 for i in range(3)]
-    d = C.D[g["run"]]
-    shot("inside", (p[0] - d[0] * 1.5, p[1] + 2.9, p[2] - d[1] * 1.5), (p[0] + d[0] * 60, p[1] - 4, p[2] + d[1] * 60), 22)
 if "all" in which or "finish" in which: shot("finish", (22, 9, -30), (-4, 14, -62), 24)
-if "corner" in which: shot("corner", (240 + 60, 75, 300 + 50), (240, 44, 300), 26)
+if "corner" in which: shot("corner", (240 + 70, 105, 300 + 60), (225, 60, 300), 26)
+if "pinball" in which: shot("pinball", (300, 80, 300), (240, 50, 200), 28)
+if "zig" in which: shot("zig", (60, 110, 230), (190, 40, 110), 24)
+if "near" in which:
+    p = at_snap(int(next((w.split("=")[1] for w in which if w.startswith("k=")), "0")))
+    shot("near", (p[0] + 22, p[1] + 14, p[2] + 22), (p[0], p[1] + 3, p[2]), 30)

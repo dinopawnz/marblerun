@@ -14,8 +14,12 @@ The game loads its models through a link pinned to one commit (`BASE` near the t
 so Otherside never serves an old copy. After changing a model: push it, then put the new commit
 in `BASE`.
 
+v3 - real physics. The marbles roll freely (no lanes), bump each other, ride the banked corners and
+bounce through open obstacles (pinball posts, bumpers, a funnel, a split). The server works the race out
+in advance (`src/sim.js`), draws it as dated glides, and hands each marble to a fresh chain of glides every
+11 s so spent animations are thrown away. The winner is still drawn 1 in 8 first.
+
 Checks before every release (in `src/`):
-- `node verify.js ../grand_marble_run_v2.html` - plays whole races in a fake world: fairness, solid track,
-  animations made ahead and never changed, clickable kiosks, the host remote's commands.
+- `node verify3.js ../grand_marble_run_v2.html` - plays a whole race in a fake world: physics followed,
+  no jumps, floors always under riders, hand-overs line up, animation and moving-solid budgets, the remote.
 - `python3 zfight.py <models>` - finds surfaces that would flicker (two faces the same way, under 8 cm apart).
-  `place_obstacles.py` puts the gates, hatches and lifts where they rest so they are checked against the track too.

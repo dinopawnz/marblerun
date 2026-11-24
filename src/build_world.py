@@ -34,78 +34,75 @@ def tint(c, k=0.32):
     h = c.lstrip("#"); base = (0x16, 0x1c, 0x2a)
     v = [int(h[i:i + 2], 16) for i in (0, 2, 4)]
     return "#%02x%02x%02x" % tuple(int(b + (x - b) * k) for x, b in zip(v, base))
-LANE_MATS = [mat("lane_" + n, tint(c), 0.5) for n, c in zip(C.NAMES, C.COLORS)]
+LANE_MATS = [mat("lane_" + n, tint(c), 0.5) for n, c in zip(C.NAMES, C.COLORS)]     # (the lift's lanes)
+M["redglow"] = mat("redglow", "#ff3048", 0.35, emit=0.7)
+M["pegtop"] = mat("pegtop", "#ffe9a8", 0.3, emit=0.8)
 CHECKER = mat("checker", "#ffffff", 0.5, image=checker_png("checker", 16, 1024, 128))
-cols = []   # invisible solids for the game: {x,y,z,w,h,d,ry,rx}
+colm = Mesh()      # the invisible solid you walk on: ONE plain model (no meshopt) in the game
+CM = mat("collide", "#ff00ff", 1.0)
 
 
 def col_box(c, s, ry=0.0, rx=0.0):
-    cols.append({k: round(v, 3) for k, v in dict(x=c[0], y=c[1], z=c[2], w=s[0], h=s[1], d=s[2], ry=ry, rx=rx).items()})
+    """an invisible solid box (axis aligned, or turned about y by a multiple of 90)"""
+    colm.box(c, s, CM, yaw=ry)
 
 
 def rp(i, t, o, y):
     return C.run_point(i, t, o, y)
 
 
+def hgt(i, t):
+    return C.height(i, t)
+
+
 track = Mesh()
 scen = Mesh()
 
-# ---------------------------------------------------------------- deck pieces
-# (run, t0, y0, t1, y1, kind)
-pieces = []
-def runspan(i):
-    s0 = HALF if C.NODES[i][3] else 0
-    s1 = C.LEN[i] - (HALF if C.NODES[(i + 1) % C.N][3] else 0)
-    return s0, s1
+# ---------------------------------------------------------------- deck pieces: straight bits of each run's profile
+pieces = []          # (run, t0, y0, t1, y1, kind)
+for i in range(C.N):
+    pr = C.profile(i)
+    for (ta, ya), (tb, yb) in zip(pr, pr[1:]):
+        if tb - ta < 0.01:
+            continue                      # a drop
+        kind = "lift" if i == 0 else ("mud" if i == C.MUD else "flat")
+        pieces.append((i, ta, ya, tb, yb, kind))
+runspan = C.runspan
 
-s0, s1 = runspan(0);  pieces.append((0, s0, 0, s1, 70, "lift"))
-s0, s1 = runspan(1);  pieces.append((1, s0, 70, s1, 52, "slope"))
-s0, s1 = runspan(2);  pieces += [(2, s0, 52, 90, 52, "flat"), (2, 90, 48, 150, 48, "flat"), (2, 150, 44, s1, 44, "flat")]
-s0, s1 = runspan(3);  pieces.append((3, s0, 44, s1, 44, "flat"))
-s0, s1 = runspan(4);  pieces.append((4, s0, 44, s1, 44, "mud"))
-s0, s1 = runspan(5);  pieces += [(5, s0, 44, 55.4, 44, "flat"), (5, 52, 36, s1, 36, "flat")]
-s0, s1 = runspan(6);  pieces.append((6, s0, 36, s1, 36, "flat"))
-s0, s1 = runspan(7);  pieces += [(7, s0, 36, 79.4, 36, "flat"), (7, 79.4, 46, s1, 46, "flat")]
-for i in (8, 9, 10):
-    s0, s1 = runspan(i); pieces.append((i, s0, 46, s1, 46, "flat"))
-s0, s1 = runspan(11); pieces += [(11, s0, 46, 45.4, 46, "flat"), (11, 45.4, 46, 170, 0, "slope"), (11, 170, 0, s1, 0, "flat")]
-
-# across the deck, from one edge to the other: which surface each strip is
+# across the deck, edge to edge: deck, a gold line inside each edge (the lift keeps its lanes)
 LINE_W = 0.3
 def bands(kind):
-    out = []
-    edges = [(j - C.LANES / 2) * C.LANE_W for j in range(C.LANES + 1)]     # -36 ... 36
-    prev = -HALF
-    for j, e in enumerate(edges):
-        out.append((prev, e - LINE_W / 2, "margin" if j == 0 else ("lane", j - 1)))
-        out.append((e - LINE_W / 2, e + LINE_W / 2, "line"))
-        prev = e + LINE_W / 2
-    out.append((prev, HALF, "margin"))
-    def m(tag):
-        if kind == "mud":
-            return M["mud"]
-        if tag == "line":
-            return M["yellow"] if kind == "lift" else M["line"]
-        if tag == "margin" or kind == "lift":
-            return M["lift"] if kind == "lift" else M["deck"]
-        return LANE_MATS[tag[1]]
-    return [(lo, hi, m(tag)) for lo, hi, tag in out]
+    if kind == "mud":
+        return [(-HALF, HALF, M["mud"])]
+    if kind == "lift":
+        out, prev = [], -HALF
+        edges = [(j - C.LANES / 2) * C.LANE_W for j in range(C.LANES + 1)]
+        for j, e in enumerate(edges):
+            out.append((prev, e - LINE_W / 2, M["lift"]))
+            out.append((e - LINE_W / 2, e + LINE_W / 2, M["yellow"]))
+            prev = e + LINE_W / 2
+        out.append((prev, HALF, M["lift"]))
+        return out
+    e = HALF - 1.2
+    return [(-HALF, -e - LINE_W, M["deck"]), (-e - LINE_W, -e, M["gold"]), (-e, e, M["deck"]), (e, e + LINE_W, M["gold"]), (e + LINE_W, HALF, M["deck"])]
 
 
-def slab_sides(top, bot):
+def slab_sides(top, bot, mesh=None):
     """bottom + four sides of a slab (the top is drawn separately as strips)"""
+    mesh = mesh or track
     ctr = tuple(sum(p[i] for p in top + bot) / 8 for i in range(3))
-    track.face(list(bot), M["dark"], out=ctr)
+    mesh.face(list(bot), M["dark"], out=ctr)
     for q in range(4):
         r = (q + 1) % 4
-        track.face([bot[q], bot[r], top[r], top[q]], M["dark"], out=ctr)
+        mesh.face([bot[q], bot[r], top[r], top[q]], M["dark"], out=ctr)
 
 
-def deck_piece(i, t0, y0, t1, y1, kind, k):
+def deck_piece(i, t0, y0, t1, y1, kind):
     top = [rp(i, t0, -HALF, y0), rp(i, t1, -HALF, y1), rp(i, t1, HALF, y1), rp(i, t0, HALF, y0)]
     bot = [(p[0], p[1] - DECK_T, p[2]) for p in top]
     slab_sides(top, bot)
-    # the top, in strips; the finish line is its own stretch of the last run
+    if kind != "lift":                # (the lift is too steep to have a solid under a rolling marble's room)
+        colm.solid(bot, top, CM)
     cuts = [(t0, t1, None)]
     if i == C.N - 1 and t0 < C.FINISH_T < t1:
         cuts = [(t0, C.FINISH_T - 1.5, None), (C.FINISH_T - 1.5, C.FINISH_T + 1.5, "checker"), (C.FINISH_T + 1.5, t1, None)]
@@ -118,98 +115,103 @@ def deck_piece(i, t0, y0, t1, y1, kind, k):
         for lo, hi, mm in bands(kind):
             q = [rp(i, ta, lo, ya), rp(i, tb, lo, yb), rp(i, tb, hi, yb), rp(i, ta, hi, ya)]
             track.face(q, mm, out=(q[0][0], q[0][1] - 5, q[0][2]))
-    # collider: a turned box through the same slope
-    d = C.D[i]
-    mid = rp(i, (t0 + t1) / 2, 0, (y0 + y1) / 2)
     L = t1 - t0
-    pitch = math.degrees(math.atan2(y1 - y0, L))
-    col_box((mid[0], mid[1] - DECK_T / 2, mid[2]), (W, DECK_T, math.hypot(L, y1 - y0) + 0.05), ry=C.heading_deg(i), rx=-pitch)
-    # lift: chevrons across, like a chain
-    if kind == "lift":
+    d = C.D[i]
+    if kind == "lift":                     # chevrons across each lane, like a chain
         t = t0 + 2
         while t < t1 - 1:
             yy = y0 + (y1 - y0) * (t - t0) / L
             for j in range(C.LANES):
                 o = C.lane_off(j)
-                a = rp(i, t, o - 2.5, yy + 0.06); b = rp(i, t, o + 2.5, yy + 0.06)
-                track.box(((a[0] + b[0]) / 2, a[1], (a[2] + b[2]) / 2), (5 if abs(d[0]) < .5 else 0.5, 0.12, 0.5 if abs(d[0]) < .5 else 5), M["yellow"])
+                a = rp(i, t - 0.25, o - 2.5, yy + 0.1 - 0.25 * (y1 - y0) / L); b = rp(i, t + 0.25, o + 2.5, yy + 0.1 + 0.25 * (y1 - y0) / L)
+                bt = [rp(i, t - 0.25, o - 2.5, yy - 0.05 - 0.25 * (y1 - y0) / L), rp(i, t + 0.25, o - 2.5, yy - 0.05 + 0.25 * (y1 - y0) / L),
+                      rp(i, t + 0.25, o + 2.5, yy - 0.05 + 0.25 * (y1 - y0) / L), rp(i, t - 0.25, o + 2.5, yy - 0.05 - 0.25 * (y1 - y0) / L)]
+                tp = [(p[0], p[1] + 0.17, p[2]) for p in bt]
+                track.solid(bt, tp, M["yellow"])
             t += 4
-    # curbs, alternating red / white (yellow on the lift), and an LED strip on top
+    # curbs, alternating red / white (yellow / black on the lift), an LED strip on top
     for sd in (-1, 1):
         o = sd * (HALF + CURB_W / 2)
-        # at an inner corner the last run's curb already covers the first CURB_W
         c0 = t0
-        if C.NODES[i][3] and abs(t0 - runspan(i)[0]) < 1e-6:
+        if C.CORNER[i] and abs(t0 - runspan(i)[0]) < 1e-6:          # an inner corner: the last run's curb covers it
             din = C.D[(i - 1) % C.N]; nn_ = C.normal(d)
             if sd * (nn_[0] * din[0] + nn_[1] * din[1]) < 0:
                 c0 = t0 + CURB_W
-        seg = 6.0
-        n = max(1, int(round((t1 - c0) / seg)))
+        n = max(1, int(round((t1 - c0) / 6.0)))
         for q in range(n):
             ta = c0 + (t1 - c0) * q / n; tb = c0 + (t1 - c0) * (q + 1) / n
-            if (i == 0 and ta < 4) or (i == 11 and tb > C.LEN[11] - 8.5):
+            if (i == 0 and ta < 4) or (i == C.N - 1 and tb > C.LEN[C.N - 1] - 8.5):
                 continue                                  # the boarding bridge crosses here
-            ya = y0 + (y1 - y0) * (ta - t0) / (t1 - t0); yb = y0 + (y1 - y0) * (tb - t0) / (t1 - t0)
+            ya = y0 + (y1 - y0) * (ta - t0) / L; yb = y0 + (y1 - y0) * (tb - t0) / L
             bot = [rp(i, ta, o - CURB_W / 2, ya - DECK_T), rp(i, tb, o - CURB_W / 2, yb - DECK_T), rp(i, tb, o + CURB_W / 2, yb - DECK_T), rp(i, ta, o + CURB_W / 2, ya - DECK_T)]
             top = [(p[0], p[1] + DECK_T + CURB_H, p[2]) for p in bot]
-            cm = M["yellow"] if kind == "lift" else (M["red"] if q % 2 else M["white"])
-            if kind == "lift" and q % 2:
-                cm = M["black"]
+            cm = (M["black"] if q % 2 else M["yellow"]) if kind == "lift" else (M["red"] if q % 2 else M["white"])
             track.solid(bot, top, cm)
-        a, b = rp(i, t0, o, y0 + CURB_H + 0.12), rp(i, t1, o, y1 + CURB_H + 0.12)
+            colm.solid(bot, top, CM)
+        a, b = rp(i, c0, o, y0 + (y1 - y0) * (c0 - t0) / L + CURB_H + 0.12), rp(i, t1, o, y1 + CURB_H + 0.12)
         nn = C.normal(d)
         q4 = [(a[0] - nn[0] * .15, a[1], a[2] - nn[1] * .15), (b[0] - nn[0] * .15, b[1], b[2] - nn[1] * .15), (b[0] + nn[0] * .15, b[1], b[2] + nn[1] * .15), (a[0] + nn[0] * .15, a[1], a[2] + nn[1] * .15)]
         track.face(q4, M["led"], out=(a[0], a[1] - 5, a[2]))
-        mid = rp(i, (t0 + t1) / 2, o, (y0 + y1) / 2 + CURB_H / 2)
-        col_box(mid, (CURB_W, CURB_H + 0.2, math.hypot(t1 - t0, y1 - y0)), ry=C.heading_deg(i), rx=-math.degrees(math.atan2(y1 - y0, t1 - t0)))
-    # a step's front face gets a hazard stripe
-    return
 
-for k, p in enumerate(pieces):
-    deck_piece(*p, k)
+for p in pieces:
+    deck_piece(*p)
 
-# corner squares (flat), curbs on their two outer sides
-for i in range(C.N):
-    if not C.NODES[i][3]:
+# the stairs: a black face down each drop, hazard stripes along the lip
+pr = C.profile(2)
+for (ta, ya), (tb, yb) in zip(pr, pr[1:]):
+    if tb - ta > 0.01:
         continue
-    x, z, y = C.NODES[i][0], C.NODES[i][1], C.NODES[i][2]
-    top = [(x - HALF, y, z - HALF), (x + HALF, y, z - HALF), (x + HALF, y, z + HALF), (x - HALF, y, z + HALF)]
-    bot = [(p[0], y - DECK_T, p[2]) for p in top]
-    slab_sides(top, bot)
-    col_box((x, y - DECK_T / 2, z), (W, DECK_T, W))
-    din, dout = C.D[(i - 1) % C.N], C.D[i]
-    ni, no = C.normal(din), C.normal(dout)
-    mt = C.miter(i)
-    P = lambda dx, dz: (x + dx, y, z + dz)
-    for lo, hi, mm in bands("flat"):
-        # in along the old run: from the square's entry edge up to the diagonal
-        ein = [P(-din[0] * HALF + ni[0] * lo, -din[1] * HALF + ni[1] * lo), P(-din[0] * HALF + ni[0] * hi, -din[1] * HALF + ni[1] * hi)]
-        dg = [P(mt[0] * lo, mt[1] * lo), P(mt[0] * hi, mt[1] * hi)]
-        eout = [P(dout[0] * HALF + no[0] * lo, dout[1] * HALF + no[1] * lo), P(dout[0] * HALF + no[0] * hi, dout[1] * HALF + no[1] * hi)]
-        track.face([ein[0], ein[1], dg[1], dg[0]], mm, out=(x, y - 5, z))
-        track.face([dg[0], dg[1], eout[1], eout[0]], mm, out=(x, y - 5, z))
-    # far side (along the exit direction): from the outer corner to the exit edge;
-    # back side (along the entry direction): from the entry edge to the far side
-    for (sx, sz), (ux, uz), a0, a1 in (((din[0], din[1]), (dout[0], dout[1]), -(HALF + CURB_W), HALF),
-                                       ((-dout[0], -dout[1]), (din[0], din[1]), -HALF, HALF)):
-        cx, cz = x + sx * (HALF + CURB_W / 2), z + sz * (HALF + CURB_W / 2)
-        L = a1 - a0
-        for q in range(8):
-            u0, u1 = a0 + L * q / 8, a0 + L * (q + 1) / 8
-            um = (u0 + u1) / 2
-            c = (cx + ux * um, y + (CURB_H - DECK_T) / 2, cz + uz * um)
-            s_ = (CURB_W, CURB_H + DECK_T, L / 8) if abs(sx) > .5 else (L / 8, CURB_H + DECK_T, CURB_W)
-            track.box(c, s_, M["red"] if q % 2 else M["white"])
-        um = (a0 + a1) / 2
-        col_box((cx + ux * um, y + CURB_H / 2, cz + uz * um), (CURB_W, CURB_H + 0.2, L) if abs(sx) > .5 else (L, CURB_H + 0.2, CURB_W))
-    # a tall marker post with a gold globe on the outer corner
-    ox, oz = x + (din[0] - dout[0]) * (HALF + 2.5), z + (din[1] - dout[1]) * (HALF + 2.5)
-    scen.prism((ox, 0, oz), 1.0, y + 9, M["dark"], n=8, y0=0)
-    scen.prism((ox, 0, oz), 1.6, 1.2, M["gold"], n=8, y0=y + 9)
-    scen.prism((ox, 0, oz), 0.9, 1.0, M["led"], n=8, y0=y + 10.2)
+    fq = [rp(2, ta, -HALF, ya - DECK_T), rp(2, ta, HALF, ya - DECK_T), rp(2, ta, HALF, yb), rp(2, ta, -HALF, yb)]     # below the upper slab's own end
+    track.face(fq, M["black"], out=rp(2, ta - 5, 0, (ya + yb) / 2))
+    for q in range(16):
+        lo, hi = -HALF + 2 * HALF * q / 16, -HALF + 2 * HALF * (q + 1) / 16
+        sl = (yb - ya) / 1.0
+        bt = [rp(2, ta - 0.8, lo, ya + 0.0), rp(2, ta, lo, ya), rp(2, ta, hi, ya), rp(2, ta - 0.8, hi, ya)]
+        bt = [(p[0], C.height(2, ta - 0.4) + 0.0, p[2]) for p in bt]
+        tp = [(p[0], p[1] + 0.12, p[2]) for p in bt]
+        track.solid(bt, tp, M["yellow"] if q % 2 else M["black"])
+
+# ---------------------------------------------------------------- corner bowls
+NA, NR = 28, 14
+def corner_bowl(j):
+    c = C.corner(j)
+    I, R, din, dout = c["I"], c["R"], c["din"], c["dout"]
+    def P(a, r, dy=0.0):
+        # a: 0 at the entry edge, pi/2 at the exit edge; r from the inner corner
+        x = I[0] + (-dout[0] * math.cos(a) + din[0] * math.sin(a)) * r
+        z = I[1] + (-dout[1] * math.cos(a) + din[1] * math.sin(a)) * r
+        return (x, C.corner_height(c, x, z) + dy, z)
+    e = R - 1.2
+    rings = [R * q / NR for q in range(NR)] + [e - LINE_W, e, R]
+    rings = sorted(set(round(r, 4) for r in rings if r <= R))
+    for qa in range(NA):
+        a0, a1 = math.pi / 2 * qa / NA, math.pi / 2 * (qa + 1) / NA
+        for r0, r1 in zip(rings, rings[1:]):
+            mm = M["gold"] if abs(r0 - (e - LINE_W)) < 1e-3 else M["deck"]
+            if r0 < 1e-6:
+                tri = [P(a0, 0), P(a0, r1), P(a1, r1)]
+                track.face(tri, mm, out=(I[0], C.corner_height(c, I[0], I[1]) - 5, I[1]))
+                track.face([P(a0, 0, -DECK_T), P(a0, r1, -DECK_T), P(a1, r1, -DECK_T)], M["dark"], out=(I[0], 1e4, I[1]))
+            else:
+                q = [P(a0, r0), P(a0, r1), P(a1, r1), P(a1, r0)]
+                track.face(q, mm, out=(q[0][0], q[0][1] - 5, q[0][2]))
+                qb = [P(a0, r0, -DECK_T), P(a0, r1, -DECK_T), P(a1, r1, -DECK_T), P(a1, r0, -DECK_T)]
+                track.face(qb, M["dark"], out=(q[0][0], q[0][1] + 50, q[0][2]))
+        # the curved wall: red / white blocks on the rim, an LED strip on top
+        b = [P(a0, R, -DECK_T), P(a1, R, -DECK_T), P(a1, R + CURB_W, -DECK_T), P(a0, R + CURB_W, -DECK_T)]
+        b = [b[0], b[1], (b[2][0], b[1][1], b[2][2]), (b[3][0], b[0][1], b[3][2])]
+        t = [(p[0], p[1] + DECK_T + CURB_H + 0.6, p[2]) for p in b]
+        track.solid(b, t, M["red"] if qa % 2 else M["white"])
+        colm.solid(b, t, CM)
+        mida = [(b[0][0] * 0.5 + b[3][0] * 0.5, t[0][1] + 0.12, b[0][2] * 0.5 + b[3][2] * 0.5), (b[1][0] * 0.5 + b[2][0] * 0.5, t[1][1] + 0.12, b[1][2] * 0.5 + b[2][2] * 0.5)]
+    # (no solid under the bowl itself: on the steep banks it would reach into a marble's room)
+    # columns under the bowl
+    for a, r in ((math.pi / 4, 0.22 * R), (math.pi / 4, 0.6 * R), (math.pi / 4, 0.92 * R), (0.25, 0.75 * R), (math.pi / 2 - 0.25, 0.75 * R), (0.55, 0.95 * R), (math.pi / 2 - 0.55, 0.95 * R)):
+        p = P(a, r, -DECK_T)
+        column(p[0], p[2], p[1] - 0.05)
 
 # ---------------------------------------------------------------- supports
-def footprint_has_lower(x, z, top, skip_run, skip_t):
+def footprint_has_lower(x, z, top):
     for (i, t0, y0, t1, y1, kind) in pieces:
         d, n = C.D[i], C.normal(C.D[i])
         px, pz = x - C.P[i][0], z - C.P[i][1]
@@ -236,19 +238,21 @@ for (i, t0, y0, t1, y1, kind) in pieces:
         pts = []
         for sd in (-1, 1):
             p = rp(i, t, sd * (HALF - 4), yy)
-            if footprint_has_lower(p[0], p[2], yy, i, t):
+            if footprint_has_lower(p[0], p[2], yy):
                 continue
             column(p[0], p[2], yy)
             pts.append(p)
         if len(pts) == 2 and yy > 6:
             a, b = pts
             scen.box(((a[0] + b[0]) / 2, yy - 1.1, (a[2] + b[2]) / 2), (abs(a[0] - b[0]) + 1.2, 1.6, abs(a[2] - b[2]) + 1.2), M["dark"])
-for i in range(C.N):
-    if C.NODES[i][3]:
-        x, z, y = C.NODES[i][:3]
-        for sx in (-1, 1):
-            for sz in (-1, 1):
-                column(x + sx * (HALF - 4), z + sz * (HALF - 4), y - DECK_T)
+for j in range(C.N):
+    if C.CORNER[j]:
+        corner_bowl(j)
+        ox, oz = C.P[j][0] + (C.D[j - 1][0] - C.D[j][0]) * (HALF + 2.5), C.P[j][1] + (C.D[j - 1][1] - C.D[j][1]) * (HALF + 2.5)
+        top = C.corner(j)["yin"] + C.BANK + 6
+        scen.prism((ox, 0, oz), 1.0, top, M["dark"], n=8, y0=0)
+        scen.prism((ox, 0, oz), 1.6, 1.2, M["gold"], n=8, y0=top)
+        scen.prism((ox, 0, oz), 0.9, 1.0, M["led"], n=8, y0=top + 1.2)
 
 # ---------------------------------------------------------------- signs over the runs
 def gantry(i, t, y, text, fg="#ffd23f", sub=None):
@@ -264,72 +268,69 @@ def gantry(i, t, y, text, fg="#ffd23f", sub=None):
     scen.box(c, (W + 8, 1.2, 1.4) if abs(C.D[i][0]) < .5 else (1.4, 1.2, W + 8), M["dark"])
     scen.sign((c[0], top + 3.1, c[2]), 34, 4.25, C.heading_deg(i) + 180, sm, frame=M["gold"])
 
-for i, (name, steps) in enumerate(C.RUNS):
-    if name in ("THE GATES", "THE TRAPDOORS", "THE ELEVATORS", "THE PLUNGE", "LIFT HILL"):
-        continue
+FG = {"THE PINBALL": "#ffd23f", "THE BUMPERS": "#ff5a5a", "THE FUNNEL": "#3fe0ff", "THE SPLIT": "#ffb11a", "THE MUD": "#d9a066", "THE STAIRS": "#ffd23f"}
+for i in range(1, C.N):
     ta, tb = runspan(i)
-    y = C.Y[i]
-    gantry(i, ta + 12, max(y, C.Y[(i + 1) % C.N]), name)
-gantry(0, 30, 13, "LIFT HILL", fg="#f2c200")
+    t = ta + 10 if i not in (3, 5, 7, 8) else ta + 6
+    gantry(i, t, max(hgt(i, t), hgt(i, ta)), C.RUNS[i], fg=FG.get(C.RUNS[i], "#ffd23f"))
+gantry(0, 30, hgt(0, 30), "LIFT HILL", fg="#f2c200")
 
-# ---------------------------------------------------------------- obstacles: frames (the moving parts are separate models)
-def lane_posts(i, t, y, h, mat_):
-    for j in range(C.LANES + 1):
-        o = (j - C.LANES / 2) * C.LANE_W
-        p = rp(i, t, o, y)
-        scen.box((p[0], y + (h - 0.4) / 2, p[2]), (0.5, h + 0.4, 0.5), mat_)     # sunk into the deck
-
-# the gates
-lane_posts(3, C.GATE_T, 44, 3.2, M["steel"])
-gantry(3, C.GATE_T, 44, "THE GATES", fg="#ff5a5a")
-# the last gates, on the lip of the plunge
-yl = 46 - (C.LAST_GATE_T - 45.4) * 46 / (170 - 45.4)
-lane_posts(11, C.LAST_GATE_T, yl, 3.2, M["steel"])
-gantry(11, C.LAST_GATE_T, 46, "THE LAST GATES", fg="#ff5a5a", sub="THEN THE PLUNGE")
-# the trapdoors: a hazard frame round the hatches
-for sd in (-1, 1):
-    a, b = rp(5, 55.4, sd * (HALF - 0.2), 44.05), rp(5, 64.6, sd * (HALF - 0.2), 44.05)
-for j in range(C.LANES + 1):
-    o = (j - C.LANES / 2) * C.LANE_W
-    p = rp(5, 60, o, 44)
-    scen.box((p[0], 44 - 0.34, p[2]), (0.4, 0.8, 9.0) if abs(C.D[5][0]) < .5 else (9.0, 0.8, 0.4), M["yellow"])
-gantry(5, 60, 44, "THE TRAPDOORS", fg="#ffb11a")
-# hazard face on the upper deck's end (the drop to the lower deck)
-p = rp(5, 55.4, 0, 44)
-scen.box((p[0], 40, p[2]), (W - 0.2, 7.6, 0.3) if abs(C.D[5][0]) < .5 else (0.3, 7.6, W - 0.2), M["black"])
-# the elevators: a shaft frame per lane
-for j in range(C.LANES + 1):
-    o = (j - C.LANES / 2) * C.LANE_W
-    for tt in (70.6, 79.4):
-        p = rp(7, tt, o, 36)
-        scen.box((p[0], 36 + 11, p[2]), (0.6, 22, 0.6), M["yellow"] if j % 2 else M["dark"])
-for tt in (70.6, 79.4):
-    p = rp(7, tt, 0, 58)
-    scen.box(p, (W + 1, 1, 0.8) if abs(C.D[7][0]) < .5 else (0.8, 1, W + 1), M["dark"])
-p = rp(7, 79.4, 0, 41)
-scen.box((p[0], 41, p[2]), (W - 0.2, 9.6, 0.4) if abs(C.D[7][0]) < .5 else (0.4, 9.6, W - 0.2), M["dark"])
-gantry(7, 75, 50, "THE ELEVATORS", fg="#3fe0ff")
-# the stairs: hazard stripes on each ledge
-for tt, yy in ((90, 52), (150, 48)):
-    p = rp(2, tt, 0, yy)
-    for q in range(16):
-        o = -HALF + W * (q + 0.5) / 16
-        pp = rp(2, tt - 0.4, o, yy + 0.05)
-        scen.box(pp, (0.8, 0.1, W / 16) if abs(C.D[2][0]) > .5 else (W / 16, 0.1, 0.8), M["yellow"] if q % 2 else M["black"])
-    scen.box((p[0], yy - 2 - 0.05, p[2]), (0.3, 3.8, W - 0.2) if abs(C.D[2][0]) > .5 else (W - 0.2, 3.8, 0.3), M["black"])
-# the mud: a glossy layer and bubbles
-ta, tb = runspan(4)
-mt = [rp(4, ta + 1, -HALF + 0.5, 44.08), rp(4, tb - 1, -HALF + 0.5, 44.08), rp(4, tb - 1, HALF - 0.5, 44.08), rp(4, ta + 1, HALF - 0.5, 44.08)]
-# (the mud is the run's own floor now - see bands)
+# ---------------------------------------------------------------- obstacles (open paths, every one)
+def deck_pt(i, t, u, dy=0.0):
+    p = rp(i, t, u, hgt(i, t) + dy)
+    return p
+# THE PINBALL: gold posts with glowing tops
+for t, u in C.PEGS:
+    p = deck_pt(3, t, u)
+    scen.prism(p, C.PEG_R, 3.2, M["gold"], n=10, y0=p[1] - 0.3)
+    scen.prism(p, C.PEG_R * 0.8, 0.5, M["pegtop"], n=10, y0=p[1] + 2.9)
+    col_box((p[0], p[1] + 1.6, p[2]), (C.PEG_R * 1.6, 3.2, C.PEG_R * 1.6))
+# THE BUMPERS: big round pinball bumpers
+for t, u, r in C.BUMPERS:
+    p = deck_pt(5, t, u)
+    scen.prism(p, r, 1.0, M["dark"], n=20, y0=p[1] - 0.3)
+    scen.prism(p, r * 1.04, 0.9, M["redglow"], n=20, y0=p[1] + 0.7)
+    scen.prism(p, r * 0.98, 1.2, M["white"], n=20, y0=p[1] + 1.6)
+    scen.prism(p, r * 0.7, 0.5, M["gold"], n=20, y0=p[1] + 2.8, r_top=r * 0.45)
+    col_box((p[0], p[1] + 1.6, p[2]), (r * 1.6, 3.2, r * 1.6))
+# THE FUNNEL: two angled walls squeeze the field to the middle and let it out again
+def wall(i, ta, ua, tb, ub, h, cols_):
+    n = max(1, int(round(math.hypot(tb - ta, ub - ua) / 5)))
+    for q in range(n):
+        f0, f1 = q / n, (q + 1) / n
+        t0_, t1_ = ta + (tb - ta) * f0, ta + (tb - ta) * f1
+        u0_, u1_ = ua + (ub - ua) * f0, ua + (ub - ua) * f1
+        dt, du = t1_ - t0_, u1_ - u0_
+        L = math.hypot(dt, du); nt, nu = -du / L * 0.45, dt / L * 0.45
+        sunk = DECK_T - 0.15             # bottom inside the slab, not on its underside
+        bot = [rp(i, t0_ - nt, u0_ - nu, hgt(i, t0_) - sunk), rp(i, t1_ - nt, u1_ - nu, hgt(i, t1_) - sunk),
+               rp(i, t1_ + nt, u1_ + nu, hgt(i, t1_) - sunk), rp(i, t0_ + nt, u0_ + nu, hgt(i, t0_) - sunk)]
+        top = [(p[0], p[1] + sunk + h, p[2]) for p in bot]
+        track.solid(bot, top, cols_[q % len(cols_)])
+        colm.solid(bot, top, CM)
+for side in (-1, 1):
+    for (ta, ua), (tb, ub) in zip(C.FUNNEL, C.FUNNEL[1:]):
+        wall(7, ta, side * ua, tb, side * ub, CURB_H + 0.6, [M["red"], M["white"]])
+# THE SPLIT: a wall down the middle, rounded ends
+wall(8, C.SPLIT[0], 0, C.SPLIT[1], 0, CURB_H + 0.6, [M["dark"]])
+for t in C.SPLIT:
+    p = deck_pt(8, t, 0)
+    scen.prism(p, C.SPLIT_R + 0.05, CURB_H + 0.6 + 0.3, M["gold"], n=10, y0=p[1] - 0.3)
+# THE MUD: a few low bubbles
 import random
 random.seed(7)
-for q in range(60):
+ta, tb = runspan(C.MUD)
+bub = []
+for q in range(400):
+    if len(bub) >= 70:
+        break
     t = random.uniform(ta + 2, tb - 2); o = random.uniform(-HALF + 2, HALF - 2)
-    if min(abs(o - C.lane_off(j)) for j in range(C.LANES)) < 4.2:
-        continue                     # keep the bubbles out of the marbles' way
-    p = rp(4, t, o, 44.05)
-    r = random.uniform(0.3, 0.6)
-    scen.prism(p, r, r * 0.8, M["mud2"], n=6, y0=44.05, r_top=r * 0.4)
+    if any(math.hypot(t - a, o - b) < 1.6 for a, b in bub):
+        continue
+    bub.append((t, o))
+    p = deck_pt(C.MUD, t, o)
+    r = random.uniform(0.3, 0.7)
+    scen.prism(p, r, 0.14, M["mud2"], n=6, y0=p[1], r_top=r * 0.55)
 
 # ---------------------------------------------------------------- the finish
 fin = rp(11, C.FINISH_T, 0, 0)
@@ -421,6 +422,9 @@ bevel(sob, 0.05)
 print("track tris", tris([tob]), "scenery tris", tris([sob]))
 export("mr_track", [tob])
 export("mr_scenery", [sob])
+cob = colm.obj("collide")
+print("collider tris", tris([cob]))
+export("mr_collide_raw", [cob])
 
 # ground: grass, a plaza round the station, paving under the zigzag
 reset()
@@ -431,7 +435,7 @@ def quad(x0, x1, z0, z1, y, m):
         g.face([(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)], m, out=(x0, y - 5, z0))
 GX0, GX1, GZ0, GZ1 = -160, 400, -360, 440          # the whole ground
 PX0, PX1, PZ0, PZ1 = -110, 110, -140, 40           # the plaza round the station
-TX, TZ0, TZ1 = C.HALF + 0.4, -76, 12               # where the track runs low: a trench under it
+TX, TZ0, TZ1 = C.HALF + 0.4, -100, 12               # where the track runs low: a trench under it
 Y0 = -0.04
 quad(GX0, GX1, GZ0, PZ0, Y0, grass); quad(GX0, GX1, PZ1, GZ1, Y0, grass)
 quad(GX0, PX0, PZ0, PZ1, Y0, grass); quad(PX1, GX1, PZ0, PZ1, Y0, grass)
@@ -441,5 +445,4 @@ quad(-TX, TX, TZ0, TZ1, -0.95, trench)
 gob = g.obj("ground")
 export("mr_ground", [gob])
 
-json.dump({"colliders": cols, "boards": BOARDS}, open("/home/claude/mr/out/world.json", "w"))
-print("colliders", len(cols))
+json.dump({"boards": BOARDS}, open("/home/claude/mr/out/world.json", "w"))
