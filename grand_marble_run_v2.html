@@ -86,6 +86,8 @@
   // race music inside every marble (an original track, a seamless 96 s loop; src/music.py made it)
   const MUSIC_SRC = "https://raw.githubusercontent.com/dinopawnz/marblerun/5e33302d8e8834cb89feb7024ca22d419434a08d/audio/race_theme.mp3";
   const MUSIC_VOL = 0.55;
+  const MUSIC_MS = 96048;          // the song's exact length. Otherside does NOT repeat a looping sound by itself
+                                   // (Spire's lift music, v58): the game moves every copy's start-time on at each loop
   const HAND_GAP = CHAIN_SECONDS * 1000 / 8;   // ms between one marble's hand-over and the next's
   const CANCEL_WINDOW = 10000;
   const LIGHT = 1;
@@ -240,7 +242,18 @@
   // other; a new chain's copy starts silent (so it is loaded and in step) and is turned up at the swap
   function addMusic(c, vol) {
     if (!HOST.music || !plan || !c.racing || c.music) return;
-    c.music = el("m-audio", { src: MUSIC_SRC, y: MR, loop: "true", volume: vol, "start-time": Math.round(plan.musicAt) }, c.pod);
+    c.music = el("m-audio", { src: MUSIC_SRC, y: MR, loop: "true", volume: vol, "start-time": musicLoopStart() }, c.pod);
+  }
+  // the start of the loop playing now (every marble's copy always has this same start-time)
+  function musicLoopStart() {
+    const P = plan;
+    return Math.round(P.musicAt + Math.max(0, Math.floor((docNow() - P.musicAt) / MUSIC_MS)) * MUSIC_MS);
+  }
+  function musicRestart(P) {
+    if (plan !== P) return;
+    const st = String(musicLoopStart());
+    marbles.forEach((list) => list.forEach((c) => { if (c.music) c.music.setAttribute("start-time", st); }));
+    at(Date.now() + (+st + MUSIC_MS - docNow()), () => musicRestart(P));
   }
   function setMusic(on) {
     HOST.music = on;
@@ -711,6 +724,7 @@
     setDoors(false);
     setBridge(true);
     const P = plan;
+    at(Date.now() + (P.musicAt + MUSIC_MS - docNow()), () => musicRestart(P));
     at(P.tLift - CLOSE_SECONDS * 1000, () => { phase = "RACE"; setDoors(true); setBridge(false); paintBoards(); });
     solveRace(P, (R, tries) => {
       if (plan !== P) return;

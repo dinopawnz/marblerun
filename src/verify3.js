@@ -106,7 +106,7 @@ ok(P.winner === drawn, "the race that is run is won by the marble drawn at the s
 let maxAnims = 0, maxSolids = 0, maxJump = 0, jumpAt = "", maxOff = 0, offAt = "", sinkMax = 0, sinkAt = "", minGap = 99, gapAt = "";
 let noFloor = 0, split = 0, splitAt = "", late = 0, lateEx = "", doorMiss = 0, handovers = 0, shutSeen = false, bridgeGone = false;
 const seenAnims = new Set();
-let musicMiss = 0; const musicStarts = new Set();
+let musicMiss = 0, musicStale = 0;
 const prev = [];
 const SAMPLE = 100;
 while (X.phase !== "IDLE" || clock < P.tLift) {
@@ -155,7 +155,7 @@ while (X.phase !== "IDLE" || clock < P.tLift) {
     for (let k = 0; k < 8; k++) {
       const loud = X.marbles()[k].map((c) => c.pod.children.find((n) => n.tagName === "M-AUDIO")).filter((a) => a && +a.attrs.volume > 0);
       if (loud.length !== 1) musicMiss++;
-      loud.forEach((a) => musicStarts.add(a.attrs["start-time"]));
+      loud.forEach((a) => { const st = +a.attrs["start-time"], d = docNow(); if (d < st || d > st + 96048 + 150) musicStale++; });
     }
   }
   if (clock - t0 > 900000) break;
@@ -178,7 +178,8 @@ ok(minGap > 6.5, "marbles bump but never pass through each other (closest centre
 const home = C.homes.every((h, k) => Math.hypot(...podPos(k).map((v, j) => v - h[j])) < 0.01);
 ok(home && X.bridge.isConnected && animsNow() === 0, "all parked home, bridge back, every race animation gone (" + animsNow() + ")");
 ok(/WINS/.test(X.boards[0][0]._t), "the boards name the winner: " + X.boards[0][0]._t);
-ok(musicMiss === 0 && musicStarts.size === 1, "race music: exactly one copy playing in every marble all race, all in time (" + musicMiss + " gaps, " + musicStarts.size + " start times)");
+ok(musicMiss === 0, "race music: exactly one copy playing in every marble, the whole race (" + musicMiss + " gaps)");
+ok(musicStale === 0, "the song is restarted by the game every 96 s, so it never goes quiet (" + musicStale + " moments past the end)");
 ok(live().filter((n) => n.tagName === "M-AUDIO").length === 0, "the music stops when the race is over");
 ok(X.errs.startsWith("0 "), "no script errors (" + X.errs + ")");
 
