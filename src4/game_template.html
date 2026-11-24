@@ -1,0 +1,664 @@
+<!--
+  THE GRAND MARBLE RUN  v3  -  a real-physics marble race for Otherside (MML)
+  Models: github.com/dinopawnz/marblerun (built in Blender, meshopt + gzip)
+  ============================================================
+
+  WHAT IT IS
+  Eight giant glass marbles. Walk into the one you want to back, the doors
+  shut, the lift hill carries all eight up 100 metres and lets them go -
+  and from there it is a real marble race: they roll anywhere on the track,
+  bump into each other, ride up the banked corners and bounce through:
+    THE DROP - THE STAIRS (two ledges to fall off) - THE PINBALL (posts) -
+    THE MUD (slow going) - THE BUMPERS - THE SPRINT - THE FUNNEL (the
+    field squeezes through the middle) - THE SPLIT (a wall down the middle)
+    - SKYLINE - LAST TURN - THE PLUNGE - the finish.
+  Nothing ever stops a marble: every obstacle leaves an open path.
+  You ride inside the whole way. Nobody steers anything.
+
+  LUCK, NOTHING ELSE
+  The winner is drawn at random, 1 in 8 for every marble, every race. The
+  game then rolls whole physics races (each ~0.4 s of work, during boarding)
+  until it finds one that marble wins, and that is the race you watch.
+
+  HOW TO RUN A RACE
+  1. Click a RACE CONTROL kiosk (either side of the boarding bridge).
+  2. Type 2468  (change RACE_CODE below before going public).
+  3. 20 seconds to walk over the bridge and into a marble.
+  4. Doors shut, the bridge folds away, off they go (about 4 minutes).
+  5. After the line the station's brakes stop them and each marble rolls
+     itself back into its own slot. Doors open, bridge back.
+  To CANCEL: type the code twice within 10 s. The marbles go straight
+  home; anyone inside drops out onto the track (harmless).
+
+  HOST REMOTE (marble_run_remote.html, PIN = RACE_CODE)
+  Start / cancel races, change the boarding time, run races back to
+  back on their own (AUTO), switch the kiosks off so only you can start
+  races, put a message on the scoreboards, and watch who is in which
+  marble and the live order. It types "<code> <command>" into the
+  hidden prompt "mr-host"; answers come back on the group "mr-remote".
+
+  HOW IT MOVES (the lessons from Ride Lab 2/3, Sky Dragon, Gravity Well)
+  - The physics is worked out on the server before the marbles roll, and
+    drawn as straight dated glides, each in a group of its own, sent ahead,
+    never changed after they are made.
+  - Spent glides cost frame rate until their part is removed, so every
+    11 s each marble is handed to a fresh chain: made empty, given its
+    floor while lying exactly on the old one, then the old chain and all
+    its spent glides are thrown away. About 270 glides alive at once.
+  - The floor riders stand on never tips or turns. Only the glass rolls.
+  - Everything solid is one invisible plain model (mr_collide.glb).
+
+  Set your spawn point beside the station, around x 60, z -5.
+-->
+
+<m-group id="world"></m-group>
+<m-group id="race"></m-group>
+
+<script>
+  // ==========================================================
+  // GUARD
+  // ==========================================================
+  let scriptErrors = 0, lastError = "";
+  function guard(fn) {
+    return function (a, b) {
+      try { return fn.call(this, a, b); }
+      catch (err) { scriptErrors++; lastError = String((err && err.message) || err).slice(0, 60); }
+    };
+  }
+  function every(fn, ms) { return setInterval(guard(fn), ms); }
+  function later(fn, ms) { return setTimeout(guard(fn), Math.max(0, ms)); }
+  function on(node, type, fn) { node.addEventListener(type, guard(fn)); }
+
+  // ==========================================================
+  // TUNING
+  // ==========================================================
+  const RACE_CODE = "2468";        // start a race. Twice within 10 s cancels one. Also the host remote's PIN.
+  const BOARD_SECONDS = 0;         // wait before the doors shut: 0 = the marbles go as soon as a race starts (the remote can add one)
+  const AUTO_GAP_SECONDS = 30;     // auto races: the wait between one race ending and the next boarding
+  const CLOSE_SECONDS = 1;         // doors shut this long before the lift moves
+  const LIFT_SECONDS = [30, 33];    // the ride up the lift hill: each marble's own, at random
+  const SIM_TUNE = { gScale: 2.0 };   // the physics (see simulateRace): 1.6 = a lively pace
+  const MAX_SPREAD = 95;            // seconds from first to last over the line (races with a bigger gap are re-rolled)
+  const MAX_TRIES = 60;
+  const TOL_XZ = 0.6, TOL_Y = 0.15;  // how closely the glides follow the physics (metres)
+  const CHAIN_SECONDS = 8;          // each marble gets a fresh chain of glides this often
+  const HAND_AHEAD = 600, HAND_SOLID = 250, HAND_SWAP = 1200;   // ms: made early, solid, swapped
+  // race music inside every marble (an original track, a seamless 96 s loop; src/music.py made it)
+  const MUSIC_SRC = "https://raw.githubusercontent.com/dinopawnz/marblerun/5e33302d8e8834cb89feb7024ca22d419434a08d/audio/race_theme.mp3";
+  const MUSIC_VOL = 0.55;
+  const MUSIC_MS = 96048;          // the song's exact length. Otherside does NOT repeat a looping sound by itself
+                                   // (Spire's lift music, v58): the game moves every copy's start-time on at each loop
+  const HAND_GAP = CHAIN_SECONDS * 1000 / 8;   // ms between one marble's hand-over and the next's
+  const CANCEL_WINDOW = 10000;
+  const LIGHT = 1;
+
+  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/1fdec039351a1c1e094a6aa33aa0882d2210889b/models4/";   // pinned to one upload: never an old copy
+  const M = (n) => BASE + n + ".glb.gz";
+
+  // the course, built in Blender from the same numbers (course.py in the repo)
+  const COURSE = /*COURSE*/null;
+  const WORLD = /*WORLD*/null;
+  const N = COURSE.names.length;
+  const MR = COURSE.mr, FLOOR_TOP = COURSE.floor_top;
+
+  // ==========================================================
+  // HELPERS
+  // ==========================================================
+  const world = document.getElementById("world");
+  const raceRoot = document.getElementById("race");
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  function el(tag, attrs, parent) {
+    const n = document.createElement(tag);
+    n.setAttribute("collide", "false");
+    for (const k in attrs) {
+      let v = attrs[k];
+      if (tag === "m-light" && k === "intensity") v = v * LIGHT;
+      n.setAttribute(k, typeof v === "number" ? String(r3(v)) : String(v));
+    }
+    (parent || world).append(n);
+    return n;
+  }
+  const SOLID = { color: "#000000", visible: "false", collide: "true", "cast-shadows": "false" };
+  function solid(attrs, parent) { return el("m-cube", Object.assign({}, SOLID, attrs), parent); }
+  function setText(label, text, color) {
+    if (label._t !== text) { label._t = text; label.setAttribute("content", text); }
+    if (color && label._c !== color) { label._c = color; label.setAttribute("font-color", color); }
+  }
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const T0 = Date.now();
+  function docNow() {
+    try { const t = document.timeline && document.timeline.currentTime; if (typeof t === "number") return t; } catch (e) {}
+    return Date.now() - T0;
+  }
+  // easing, as m-attr-anim plays it (so the server knows where everyone is)
+  const EASE = {
+    linear: (u) => u,
+    easeInQuad: (u) => u * u,
+    easeOutQuad: (u) => 1 - (1 - u) * (1 - u),
+    easeInOutSine: (u) => -(Math.cos(Math.PI * u) - 1) / 2,
+  };
+
+  // ==========================================================
+  // THE WORLD - models to look at, invisible boxes to stand on
+  // ==========================================================
+  el("m-model", { src: M("mr4_ground"), "cast-shadows": "false" });
+  el("m-model", { src: M("mr4_track") });
+  el("m-model", { src: M("mr4_struct") });
+  el("m-model", { src: M("mr4_signs"), "cast-shadows": "false" });
+  el("m-model", { src: M("mr4_station") });
+  solid({ x: 200, y: -2.06, z: -30, width: 1040, height: 2, depth: 1300 });     // a floor under the hills, just in case
+  // everything you can stand on or bump into, as ONE invisible model (a plain .glb: packed colliders don't work)
+  el("m-model", { src: BASE + "mr4_collide.glb", visible: "false", collide: "true", "cast-shadows": "false" });
+  [[-50, -20, "#7fe8ff"], [50, -20, "#ff8fe0"], [-50, 25, "#ffd36b"], [50, 25, "#b6ff5a"]].forEach(([x, z, c]) => el("m-light", { x: x, y: 16, z: z, type: "point", intensity: 1.2, distance: 70, color: c }));
+  // the living world round the course: glowing mushrooms, ferns, crystals, spirit trees, floating islands,
+  // jellyfish - the animated ones play their own looping clip (each starts at a different point so they never move in step)
+  WORLD.props.forEach(([name, x, y, z, ry, s, anim], i) => {
+    const a = { src: M(name), x, y, z, ry, sx: s, sy: s, sz: s, collide: "false", "cast-shadows": "false" };
+    if (anim) Object.assign(a, { anim: M(name), "anim-loop": "true", "anim-start-time": -Math.round((i * 1733) % 9000) });
+    el("m-model", a);
+  });
+  const flashLight = el("m-light", { x: 0, y: 24, z: -12, type: "point", intensity: 0, distance: 90, color: "#ffffff" });
+
+  // the boarding bridge: folds away (leaves the document) while a race is on
+  const bridge = el("m-group", {});
+  el("m-model", { src: M("mr4_bridge") }, bridge);
+  solid({ x: 0, y: 0.9, z: -4.95, width: 2 * (COURSE.half + 1), height: 0.6, depth: 5.1 }, bridge);
+  solid({ x: 0, y: 1.8, z: -7.35, width: 2 * (COURSE.half + 1), height: 1.2, depth: 0.3 }, bridge);
+  let bridgeOut = true;
+  function setBridge(out) {
+    if (out === bridgeOut) return;
+    bridgeOut = out;
+    if (out) world.append(bridge); else bridge.remove();
+  }
+
+  // ==========================================================
+  // THE MARBLES (rebuilt every race)
+  // ==========================================================
+  // A marble is a CHAIN: root (where it is at the chain's start) > glide > glide > ... > pod.
+  // Each glide group carries ONE dated animation (one coordinate, one straight stretch) and
+  // nothing else; before its start time it shows 0, after it the whole stretch.
+  // The physics is worked out in advance (simulateRace below) and drawn as these glides.
+  // Animations cost frame rate until the part they are on is removed, so a marble does not
+  // carry a whole race of them: every CHAIN_SECONDS a fresh chain is made (sent ahead, empty),
+  // it gets its floor and walls while it lies exactly on top of the old one, then the old chain
+  // - with all its spent animations - is thrown away. Riders stand on both floors for a moment
+  // and never notice. The floor riders stand on never tips or turns: only the glass rolls.
+  let marbles = [];
+  const RIDERS = [];              // per marble: who is standing in it (connection id -> last seen)
+  // the room riders stand in: a floor, four walls (the one facing the station is the door) and a lid
+  const DOOR = 2;
+  function side(i) {
+    const a = i * 90, r = a * Math.PI / 180, rc = 3.1 + 0.5;
+    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP + 7.2) / 2, ry: a, width: 7.2, height: 6, depth: 1 };
+  }
+  // value of a coordinate at time t from its knots [[t, v], ...]
+  function knotAt(K, t) {
+    if (t <= K[0][0]) return K[0][1];
+    for (let i = 0; i < K.length - 1; i++) {
+      const a = K[i], b = K[i + 1];
+      if (t <= b[0]) return a[1] + (b[1] - a[1]) * (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
+    }
+    return K[K.length - 1][1];
+  }
+  // a chain for marble k covering times [S, E] (absolute ms); its parts are added later
+  function buildChain(k, P, S, E) {
+    const K = P ? P.m[k].knots : null;
+    const home = COURSE.homes[k];
+    const p0 = K ? [knotAt(K[0], S), knotAt(K[1], S), knotAt(K[2], S)] : home;
+    const root = el("m-group", { x: p0[0], y: p0[1], z: p0[2] }, raceRoot);
+    let g = root, anims = 0;
+    if (K) {
+      // every glide in time order, each in its own group
+      const segs = [];
+      ["x", "y", "z"].forEach((ax, j) => {
+        const Kj = K[j];
+        for (let i = 0; i < Kj.length - 1; i++) {
+          const t0 = Math.max(Kj[i][0], S), t1 = Kj[i + 1][0];
+          if (t1 <= S) continue;
+          if (Kj[i][0] >= E) break;
+          const d = Kj[i + 1][1] - knotAt(Kj, t0);
+          if (Math.abs(d) < 0.002 || t1 - t0 < 1) continue;
+          segs.push({ ax, t0, t1, d });
+        }
+      });
+      segs.sort((a, b) => a.t0 - b.t0);
+      segs.forEach((q) => {
+        g = el("m-group", {}, g);
+        const st = Math.round(P.doc(q.t0)), en = Math.round(P.doc(q.t1));
+        el("m-attr-anim", { attr: q.ax, start: 0, end: q.d, "start-time": st, duration: Math.max(1, en - st), easing: "linear", loop: "false" }, g);
+        anims++;
+      });
+    }
+    const pod = el("m-group", {}, g);
+    return { k, root, pod, S, E, anims, parts: false, look: false, door: null, racing: !!P };
+  }
+  // the floor, walls and lid riders are held by
+  function addSolids(c) {
+    if (c.parts) return;
+    c.parts = true;
+    const k = c.k, pod = c.pod;
+    const floor = el("m-cylinder", Object.assign({}, SOLID, { y: FLOOR_TOP - 0.2, radius: 2.8, height: 0.4, "collision-interval": 1000 }), pod);
+    const seen = RIDERS[k] || (RIDERS[k] = new Map());       // who is standing in this marble (for the host remote)
+    const touch = (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.set(id, Date.now()); };
+    on(floor, "collisionstart", touch); on(floor, "collisionmove", touch);
+    on(floor, "collisionend", (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.delete(id); });
+    for (let i = 0; i < 4; i++) if (i !== DOOR) solid(side(i), pod);
+    solid({ y: 7.5, width: 8.2, height: 0.6, depth: 8.2 }, pod);
+    if (doorsShut) c.door = solid(side(DOOR), pod);
+    addMusic(c, c.look ? MUSIC_VOL : 0);
+  }
+  // every marble plays the same track from the same moment, so they are always in time with each
+  // other; a new chain's copy starts silent (so it is loaded and in step) and is turned up at the swap
+  function addMusic(c, vol) {
+    if (!HOST.music || !plan || !c.racing || c.music) return;
+    c.music = el("m-audio", { src: MUSIC_SRC, y: MR, loop: "true", volume: vol, "start-time": musicLoopStart() }, c.pod);
+  }
+  // the start of the loop playing now (every marble's copy always has this same start-time)
+  function musicLoopStart() {
+    const P = plan;
+    return Math.round(P.musicAt + Math.max(0, Math.floor((docNow() - P.musicAt) / MUSIC_MS)) * MUSIC_MS);
+  }
+  function musicRestart(P) {
+    if (plan !== P) return;
+    const st = String(musicLoopStart());
+    marbles.forEach((list) => list.forEach((c) => { if (c.music) c.music.setAttribute("start-time", st); }));
+    at(Date.now() + (+st + MUSIC_MS - docNow()), () => musicRestart(P));
+  }
+  function setMusic(on) {
+    HOST.music = on;
+    marbles.forEach((list) => list.forEach((c) => {
+      if (on && c.parts) addMusic(c, c.look ? MUSIC_VOL : 0);
+      if (!on && c.music) { c.music.remove(); c.music = null; }
+    }));
+  }
+  // what you see: the pod and the glass, facing the way it rolls, spinning at its speed
+  function addLooks(c, P) {
+    if (c.look) return;
+    c.look = true;
+    if (c.music) c.music.setAttribute("volume", String(MUSIC_VOL));
+    const k = c.k, pod = c.pod;
+    el("m-model", { src: M("mr4_pod_" + COURSE.names[k].toLowerCase()), "cast-shadows": "false" }, pod);
+    let ry = COURSE.heading[0], speed = 0;
+    if (P) {
+      const K = P.m[k].knots, a = Math.max(c.S, P.m[k].rel), b = Math.min(c.E, P.m[k].park);
+      if (b - a > 500) {
+        const dx = knotAt(K[0], b) - knotAt(K[0], a), dz = knotAt(K[2], b) - knotAt(K[2], a);
+        if (Math.hypot(dx, dz) > 1) ry = Math.atan2(dx, dz) * 180 / Math.PI;
+        speed = Math.hypot(dx, dz) / ((b - a) / 1000);
+      }
+      c.spinFrom = a; c.spinTo = b;
+    }
+    const turn = el("m-group", { y: MR, ry: Math.round(ry) }, pod);
+    const spin = el("m-group", {}, turn);
+    el("m-model", { src: M("mr4_ball_" + COURSE.names[k].toLowerCase()), "cast-shadows": "false" }, spin);
+    if (P && speed > 1) {
+      el("m-attr-anim", { attr: "rx", start: 0, end: 360, duration: Math.round(2 * Math.PI * MR / speed * 1000), loop: "true",
+        "start-time": Math.round(P.doc(c.spinFrom)), "pause-time": Math.round(P.doc(c.spinTo)) }, spin);
+      c.anims++;
+    }
+  }
+  let doorsShut = false;
+  function setDoors(shut) {
+    doorsShut = shut;
+    marbles.forEach((list) => list.forEach((c) => {
+      if (!c.parts) return;
+      if (shut && !c.door) c.door = solid(side(DOOR), c.pod);
+      if (!shut && c.door) { c.door.remove(); c.door = null; }
+    }));
+  }
+  // marbles[k] = the chains alive for marble k (one, or two during a hand-over)
+  function rebuild(P) {
+    marbles.forEach((list) => list.forEach((c) => c.root.remove()));
+    marbles = [];
+    for (let k = 0; k < N; k++) {
+      const c = buildChain(k, P, P ? P.tLift - 1000 : 0, P ? P.m[k].rel : 0);
+      addSolids(c); addLooks(c, P);
+      marbles.push([c]);
+    }
+  }
+  // the next chain for marble k: made empty, solid once it lies on the old one, then the old one goes
+  function handOver(k, P, S, E) {
+    const c = buildChain(k, P, S, E);
+    marbles[k].push(c);
+    at(S + HAND_SOLID, () => { if (plan === P) addSolids(c); });
+    at(S + HAND_SWAP, () => {
+      if (plan !== P) return;
+      addLooks(c, P);
+      const old = marbles[k].filter((o) => o !== c);
+      old.forEach((o) => o.root.remove());
+      marbles[k] = [c];
+    });
+  }
+  const liveAnims = () => marbles.reduce((a, list) => a + list.reduce((b, c) => b + c.anims, 0), 0);
+
+  // ==========================================================
+  // THE RACE - real physics, worked out when boarding starts
+  // ==========================================================
+/*SIM*/
+  // Draw the winner first (1 in 8, every race), then roll whole races until one is won by
+  // that marble - so every marble has exactly the same chance whatever its start, and what
+  // you watch is a real roll of the dice, bumps and all. One race at a time, between other work.
+  function solveRace(P, done) {
+    let tries = 0, fallback = null;
+    const step = () => {
+      if (plan !== P) return;
+      const R = simulateRace(COURSE, Math.random, P.lift.map((ms) => ms / 1000), SIM_TUNE);
+      tries++;
+      const good = R.ok && R.marbles[R.finishOrder[N - 1]].finish - R.marbles[R.finishOrder[0]].finish <= MAX_SPREAD;
+      if (good && !fallback) fallback = R;
+      if (good && R.finishOrder[0] === P.winner) return done(R, tries);
+      if (Date.now() > P.solveBy || tries >= MAX_TRIES) {
+        if (fallback) return done(fallback, tries);
+        if (R.ok) return done(R, tries);
+      }
+      later(step, 5);
+    };
+    later(step, 5);
+  }
+  function makePlan() {
+    const now = Date.now(), d0 = docNow();
+    const tLift = now + (HOST.board + CLOSE_SECONDS) * 1000;
+    const lift = []; for (let k = 0; k < N; k++) lift.push(Math.round(rand(LIFT_SECONDS[0], LIFT_SECONDS[1]) * 1000));
+    const P = { winner: Math.floor(Math.random() * N) % N, tLift, lift, musicAt: d0 + 300, tRace: tLift + Math.min(...lift), announced: false, ready: false,
+      solveBy: tLift + Math.min(...lift) - 16000, doc: (t) => d0 + (t - now), tries: 0 };
+    // until the physics is worked out, every marble's path is just the lift
+    P.m = lift.map((L, k) => {
+      const h = COURSE.homes[k], top = COURSE.tops[k];
+      return { rel: tLift + L, park: tLift + L, finish: Infinity, knots: [0, 1, 2].map((j) => [[tLift, h[j]], [tLift + L, top[j]]]) };
+    });
+    return P;
+  }
+  // the physics is in: every marble's path, as few straight glides as stay within a hand's width
+  function applySim(P, R) {
+    P.sim = R; P.ready = true;
+    P.winner = R.finishOrder[0];
+    R.marbles.forEach((sm, k) => {
+      const m = P.m[k];
+      const pi = sm.samples.findIndex((s) => s[0] >= sm.parkAt - 1e-6);
+      const last = pi < 0 ? sm.samples.length : pi + 1;
+      const S = sm.samples.slice(0, Math.max(2, last));
+      const ts = S.map((s) => P.tLift + s[0] * 1000);
+      m.knots = [1, 2, 3].map((j) => {
+        const K = fitAxis(ts, S.map((s) => s[j]), j === 2 ? TOL_Y : TOL_XZ);
+        // the lift exactly as the first chain has it, then the roll
+        return [[P.tLift, COURSE.homes[k][j - 1]], [m.rel, COURSE.tops[k][j - 1]]].concat(K.filter((q) => q[0] > m.rel + 1));
+      });
+      m.park = ts[ts.length - 1];
+      m.finish = P.tLift + sm.finish * 1000;
+      m.prog = sm.progress;
+      m.progT0 = P.tLift + sm.samples[0][0] * 1000;
+    });
+    P.end = P.tLift + R.end * 1000 + 1500;
+  }
+
+  // where marble k is round the course at time t (for the boards)
+  function progress(k, t) {
+    if (!plan || !plan.ready) return 0;
+    const m = plan.m[k];
+    if (t < m.progT0) return -1e5 + (t - plan.tLift);
+    const i = Math.min(m.prog.length - 1, Math.floor((t - m.progT0) / (plan.sim.sampleDt * 1000)));
+    return m.prog[i];
+  }
+
+  // ==========================================================
+  // BOARDS - the only live text: three boards of 9 lines
+  // ==========================================================
+  const boards = WORLD.boards.map((b) => {
+    const g = el("m-group", { x: b.x, y: b.y, z: b.z, ry: b.ry });
+    const rows = [];
+    for (let r = 0; r <= N; r++) {
+      rows.push(el("m-label", { z: 0.12, y: 8.8 - r * 2.2, width: 21, height: r ? 1.9 : 2.1, "font-size": r ? 150 : 170, alignment: "center",
+        color: "#16161a", "font-color": r ? "#f1f2ea" : "#ffd23f", content: r ? COURSE.names[r - 1] : "THE GRAND MARBLE RUN" }, g));
+    }
+    return rows;
+  });
+  let noticeText = "", noticeUntil = 0;
+  function notice(text, ms) { noticeText = text; noticeUntil = Date.now() + ms; paintBoards(); }
+  function standings(t) {
+    const o = []; for (let k = 0; k < N; k++) o.push(k);
+    o.sort((a, b) => {
+      const fa = t >= plan.m[a].finish, fb = t >= plan.m[b].finish;
+      if (fa && fb) return plan.m[a].finish - plan.m[b].finish;
+      if (fa !== fb) return fa ? -1 : 1;
+      return progress(b, t) - progress(a, t);
+    });
+    return o;
+  }
+  function paintBoards() {
+    const t = Date.now();
+    let title = "THE GRAND MARBLE RUN";
+    let rows = COURSE.names.map((n, k) => [n, COURSE.colors[k]]);
+    if (phase === "BOARDING") title = "BOARDING  " + Math.max(0, Math.ceil((plan.tLift - CLOSE_SECONDS * 1000 - t) / 1000));
+    else if (phase === "RACE" && t < plan.tLift) title = "DOORS CLOSED";
+    else if (phase === "RACE" && t < plan.tRace) title = "UP THE LIFT HILL";
+    else if (phase === "RACE" && !plan.announced) title = "RACING";
+    if (plan && plan.announced) title = COURSE.names[plan.winner] + " WINS!";
+    if (plan && plan.ready && (phase === "RACE" || plan.announced) && t >= plan.tRace) {
+      const o = standings(t);
+      rows = o.map((k, i) => {
+        let s = (i + 1) + "   " + COURSE.names[k];
+        if (t >= plan.m[k].finish) s += i === 0 ? "   WINNER" : "   +" + ((plan.m[k].finish - plan.m[o[0]].finish) / 1000).toFixed(1) + "s";
+        return [s, COURSE.colors[k]];
+      });
+    }
+    if (noticeUntil > t) title = noticeText;
+    boards.forEach((b) => {
+      setText(b[0], title);
+      for (let r = 0; r < N; r++) setText(b[r + 1], rows[r][0], rows[r][1]);
+    });
+  }
+
+  // ==========================================================
+  // GAME FLOW
+  // ==========================================================
+  let phase = "IDLE";     // IDLE | BOARDING | RACE
+  const HOST = { music: true, board: BOARD_SECONDS, auto: false, gap: AUTO_GAP_SECONDS, kiosks: true, nextAt: 0, nextT: 0 };
+  let plan = null, timers = [], cancelArmedUntil = 0;
+  function at(t, fn) { timers.push(later(fn, t - Date.now())); }
+  function clearTimers() { timers.forEach((h) => clearTimeout(h)); timers = []; }
+
+  function startRace() {
+    clearTimers();
+    clearTimeout(HOST.nextT); HOST.nextAt = 0;
+    plan = makePlan();
+    phase = "BOARDING";
+    rebuild(plan);
+    setDoors(false);
+    setBridge(true);
+    const P = plan;
+    at(Date.now() + (P.musicAt + MUSIC_MS - docNow()), () => musicRestart(P));
+    at(P.tLift - CLOSE_SECONDS * 1000, () => { phase = "RACE"; setDoors(true); setBridge(false); paintBoards(); });
+    solveRace(P, (R, tries) => {
+      if (plan !== P) return;
+      P.tries = tries;
+      applySim(P, R);
+      // fresh chains all the way round. The first hand-over is while still on the lift; marbles
+      // take turns, HAND_GAP apart, so no two hand-overs ever overlap.
+      const order = P.m.map((m, k) => k).sort((a, b) => P.m[a].rel - P.m[b].rel);
+      const base = Math.min(...order.map((k, i) => P.m[k].rel - 1500 - HAND_GAP * i));
+      order.forEach((k, i) => {
+        const m = P.m[k];
+        let S = base + HAND_GAP * i;
+        while (S < m.park) {
+          const next = S + CHAIN_SECONDS * 1000, E = next >= m.park ? Infinity : next + HAND_SWAP + 600;
+          const s0 = S;
+          at(s0 - HAND_AHEAD, () => { if (plan === P) handOver(k, P, s0, E); });
+          S = next;
+        }
+      });
+      at(P.m[P.winner].finish, () => {
+        if (plan !== P) return;
+        P.announced = true;
+        flashLight.setAttribute("color", COURSE.colors[P.winner]);
+        flashLight.setAttribute("intensity", String(3 * LIGHT));
+        at(Date.now() + 6000, () => flashLight.setAttribute("intensity", "0"));
+        paintBoards();
+      });
+      at(P.end, () => {
+        if (plan !== P) return;
+        phase = "IDLE";
+        rebuild(null);              // a clean slate: every race animation leaves with its parts
+        setDoors(false);
+        setBridge(true);
+        paintBoards();
+        if (HOST.auto) queueAuto(HOST.gap * 1000);
+      });
+    });
+    paintBoards();
+  }
+  function cancelRace() {
+    clearTimers();
+    const P = plan;
+    plan = null;
+    phase = "IDLE";
+    rebuild(null);
+    setDoors(false);
+    setBridge(true);
+    notice("RACE CANCELLED", 6000);
+  }
+  function codeEntered() {
+    const now = Date.now();
+    if (phase === "IDLE") { cancelArmedUntil = 0; startRace(); return; }
+    if (now < cancelArmedUntil) { cancelArmedUntil = 0; cancelRace(); return; }
+    cancelArmedUntil = now + CANCEL_WINDOW;
+    notice("CODE AGAIN TO CANCEL", CANCEL_WINDOW);
+  }
+  // race control: a see-through box over each kiosk, inside the code prompt.
+  // (it must be drawn to be clicked: visible="false" makes it unclickable, opacity 0 doesn't)
+  const HIT = { color: "#ffffff", opacity: 0, "cast-shadows": "false", collide: "false" };
+  [-1, 1].forEach((sd) => {
+    const wrap = el("m-prompt", { message: "Race code", placeholder: "code" });
+    el("m-cube", Object.assign({ x: sd * (COURSE.half + 12), y: 2.2, z: -5, width: 5.2, height: 3.4, depth: 4.2 }, HIT), wrap);
+    on(wrap, "prompt", (e) => {
+      const typed = String((e && e.detail && e.detail.value) || "").replace(/[^0-9]/g, "");
+      if (typed !== RACE_CODE) return;                 // anything else: nothing happens
+      if (!HOST.kiosks) { notice("RACE CONTROL IS OFF", 4000); return; }
+      codeEntered();
+    });
+  });
+
+  // ==========================================================
+  // HOST REMOTE - marble_run_remote.html types "<code> <command>" into this prompt
+  // and reads the answers off the board below (only remotes ever receive it)
+  // ==========================================================
+  const PARK = -500;
+  const hostPrompt = el("m-prompt", { id: "mr-host", message: "Host code + command", placeholder: "code + command", x: 0, y: PARK, z: 0 });
+  const remoteBoard = el("m-group", { id: "mr-remote", y: PARK, "visible-to": "-1" });
+  const ONLINE = new Set(), REMOTES = new Set();
+  const ack = { n: 0, l: [] };
+  function hostMsg(t) {
+    t = String(t); ack.n++; ack.l.push({ n: ack.n, t }); if (ack.l.length > 12) ack.l.shift();
+    remoteBoard.setAttribute("data-ack", JSON.stringify({ n: ack.n, t, l: ack.l }));
+    paintRemote();
+  }
+  function riders(k) {
+    const m = RIDERS[k]; if (!m) return 0;
+    let n = 0;                     // (players standing still send no "move" events, so no time-out: a step off sends "end")
+    m.forEach((t, id) => { if (!ONLINE.has(id)) m.delete(id); else n++; });
+    return n;
+  }
+  function paintRemote() {
+    if (!REMOTES.size) return;
+    const t = Date.now();
+    const P = plan;
+    let ph = "idle";
+    if (phase === "BOARDING") ph = "boarding";
+    else if (phase === "RACE") ph = P && P.announced ? "finished" : t < P.tRace ? "lift" : "race";
+    const order = P && P.ready && t >= P.tRace ? standings(t) : null;
+    const g = {
+      now: t, ph, ev: ack.l.length ? ack.l[ack.l.length - 1].t : "",
+      board: HOST.board, music: HOST.music, auto: HOST.auto, gap: HOST.gap, kiosks: HOST.kiosks, nextAt: HOST.nextAt || 0,
+      online: ONLINE.size, errors: scriptErrors, lastError,
+      closeAt: P ? P.tLift - CLOSE_SECONDS * 1000 : 0, liftAt: P ? P.tLift : 0, raceAt: P ? P.tRace : 0, endAt: P && P.end ? P.end : 0,
+      winner: P && P.announced ? COURSE.names[P.winner] : "",
+      cancelArmed: t < cancelArmedUntil, anims: liveAnims(),
+      marbles: COURSE.names.map((n, k) => ({
+        n, c: COURSE.colors[k], riders: riders(k),
+        pos: order ? order.indexOf(k) + 1 : 0,
+        done: !!(P && P.ready && t >= P.m[k].finish && t >= P.tRace),
+        gap: P && order && t >= P.m[k].finish ? Math.round(P.m[k].finish - P.m[order[0]].finish) : null,
+      })),
+    };
+    remoteBoard.setAttribute("data-game", JSON.stringify(g));
+  }
+  every(paintRemote, 1000);
+  function hostCommand(cmd, parts, rest) {
+    if (cmd === "start") {
+      if (phase !== "IDLE") return "A RACE IS ALREADY ON";
+      cancelArmedUntil = 0; startRace(); return HOST.board ? "RACE STARTED - BOARDING FOR " + HOST.board + " S" : "RACE STARTED - THEY'RE OFF!";
+    }
+    if (cmd === "cancel" || cmd === "stop") {
+      if (phase === "IDLE") { if (HOST.nextAt) { clearTimeout(HOST.nextT); HOST.nextAt = 0; return "NEXT AUTO RACE CALLED OFF"; } return "NO RACE TO CANCEL"; }
+      cancelRace(); return "RACE CANCELLED - EVERYONE BACK IN THE STATION";
+    }
+    if (cmd === "board") {
+      const v = parseInt(parts[1], 10);
+      if (!(v >= 0 && v <= 120)) return "BOARDING TIME MUST BE 0 TO 120 S";
+      HOST.board = v; return (v ? "BOARDING TIME " + v + " S" : "NO WAIT - MARBLES GO AT ONCE") + (phase === "BOARDING" ? " (FROM THE NEXT RACE)" : "");
+    }
+    if (cmd === "auto") {
+      const a = (parts[1] || "").toLowerCase();
+      HOST.auto = a === "on" ? true : a === "off" ? false : !HOST.auto;
+      if (!HOST.auto && HOST.nextAt) { clearTimeout(HOST.nextT); HOST.nextAt = 0; }
+      if (HOST.auto && phase === "IDLE" && !HOST.nextAt) queueAuto(5000);
+      return HOST.auto ? "AUTO RACES ON - A NEW RACE " + HOST.gap + " S AFTER EACH ONE" : "AUTO RACES OFF";
+    }
+    if (cmd === "gap") {
+      const v = parseInt(parts[1], 10);
+      if (!(v >= 10 && v <= 600)) return "THE GAP MUST BE 10 TO 600 S";
+      HOST.gap = v; return "AUTO GAP " + v + " S";
+    }
+    if (cmd === "kiosks") {
+      const a = (parts[1] || "").toLowerCase();
+      HOST.kiosks = a === "on" ? true : a === "off" ? false : !HOST.kiosks;
+      return HOST.kiosks ? "RACE CONTROL KIOSKS ON" : "RACE CONTROL KIOSKS OFF - ONLY THE REMOTE STARTS RACES";
+    }
+    if (cmd === "music") {
+      const a = (parts[1] || "").toLowerCase();
+      setMusic(a === "on" ? true : a === "off" ? false : !HOST.music);
+      return HOST.music ? "RACE MUSIC ON" : "RACE MUSIC OFF";
+    }
+    if (cmd === "say") {
+      const text = rest.slice(3).trim().toUpperCase().replace(/[^A-Z0-9 !?.,'&:+-]/g, "").slice(0, 28);
+      if (!text) return "SAY WHAT? TRY: SAY GOOD LUCK";
+      notice(text, 10000); return "ON THE BOARDS: " + text;
+    }
+    if (cmd === "status") {
+      return (phase === "IDLE" ? "WAITING" : phase) + " - " + ONLINE.size + " ONLINE - AUTO " + (HOST.auto ? "ON" : "OFF");
+    }
+    return null;
+  }
+  on(hostPrompt, "prompt", (e) => {
+    const raw = String((e && e.detail && e.detail.value) || "").replace(/\s+/g, " ").trim();
+    if (raw.indexOf(RACE_CODE) !== 0) { hostMsg("WRONG CODE"); return; }
+    const rest = raw.slice(RACE_CODE.length).trim();
+    const parts = rest.split(" ").filter(Boolean);
+    const cmd = (parts[0] || "").toLowerCase();
+    const id = e.detail.connectionId;
+    if (cmd === "remote") {
+      if (id === undefined) { hostMsg("REMOTE: NO CONNECTION ID"); return; }
+      REMOTES.add(id); ONLINE.delete(id); remoteBoard.setAttribute("visible-to", Array.from(REMOTES).join(" "));
+      hostMsg("UNLOCKED"); return;
+    }
+    let reply = null;
+    try { reply = hostCommand(cmd, parts, rest); } catch (err) { reply = "ERROR: " + (err && err.message); }
+    hostMsg(reply || "UNKNOWN: " + (cmd || "(nothing)") + " - TRY: START, CANCEL, AUTO, BOARD 30");
+  });
+  window.addEventListener("connected", guard((e) => { if (e.detail && !REMOTES.has(e.detail.connectionId)) ONLINE.add(e.detail.connectionId); }));
+  window.addEventListener("disconnected", guard((e) => {
+    const c = e.detail && e.detail.connectionId;
+    ONLINE.delete(c);
+    RIDERS.forEach((m) => m && m.delete(c));
+    if (REMOTES.delete(c)) remoteBoard.setAttribute("visible-to", REMOTES.size ? Array.from(REMOTES).join(" ") : "-1");
+  }));
+  function queueAuto(ms) {
+    clearTimeout(HOST.nextT);
+    HOST.nextAt = Date.now() + ms;
+    HOST.nextT = later(() => { HOST.nextAt = 0; if (HOST.auto && phase === "IDLE") { startRace(); hostMsg("AUTO: NEW RACE - BOARDING"); } }, ms);
+  }
+
+  every(paintBoards, 2000);
+  rebuild(null);
+  setDoors(false);
+  paintBoards();
+</script>
