@@ -314,7 +314,7 @@ for i in range(1, C.N):
         s = 8.0
         while s < t1 - t0 - 4:
             p = deck_pt(i, s, 0)
-            A.tunnel_ring(track, p, C.heading_deg(i) + 90, 2 * HALF + 6, 26, ms, seed=int(s))
+            A.tunnel_ring(track, p, C.heading_deg(i), 2 * HALF + 6, 26, ms, seed=int(s))
             colm.tube  # (the rings stand outside the deck: their feet are beyond the rails)
             TUN.append([round(v, 2) for v in p])
             s += 12.0
@@ -335,7 +335,7 @@ def sign_arch(i, s, text, c1, c2):
     t0 = C.runspan(i)[0]
     p = rp(i, t0 + s, 0, 0)
     y = hgt(i, t0 + s)
-    W = A.arch(signs, (p[0], 0, p[2]), C.heading_deg(i) + 90, 2 * HALF + 10, y + 34, ms, seed=i)
+    W = A.arch(signs, (p[0], 0, p[2]), C.heading_deg(i), 2 * HALF + 10, y + 34, ms, seed=i)
     tex4.holo_text("sign4_" + text.replace(" ", "_").lower(), text, c1=c1, c2=c2)
     sm = mat("sign4_" + text, "sign4_" + text.replace(" ", "_").lower(), emit=2.0, rough=0.4)
     A.text_panel(signs, (p[0], y + 22, p[2]), C.heading_deg(i) + 180, 40, 6.25, sm, curve=1.2)
@@ -353,13 +353,13 @@ for i in range(1, C.N):
     sign_arch(i, 12 if C.KIND[i] not in ("tunnel",) else 2, C.RUNS[i], *PAL[i % len(PAL)])
 # the lift
 tex4.holo_text("sign4_lift", "LIFT HILL", c1="#ffd36b", c2="#ff7a2e")
-W = A.arch(signs, (0, 0, 40), 90, 2 * HALF + 10, C.height(0, 40) + 30, ms, seed=99)
+W = A.arch(signs, (0, 0, 40), 0, 2 * HALF + 10, C.height(0, 40) + 30, ms, seed=99)
 A.text_panel(signs, (0, C.height(0, 40) + 19, 40), 180, 40, 6.25, mat("sign4_lift", "sign4_lift", emit=2.0), curve=1.2)
 
 # ---------------------------------------------------------------- the finish
 fz = C.finish = C.run_point(C.N - 1, C.FINISH_T, 0, 0)
-A.arch(signs, (0, 0, fz[2]), 90, 2 * HALF + 14, 40, ms, seed=123)
-A.arch(signs, (0, 0, fz[2] + 3), 90, 2 * HALF + 12, 36, ms, seed=124)
+A.arch(signs, (0, 0, fz[2]), 0, 2 * HALF + 14, 40, ms, seed=123)
+A.arch(signs, (0, 0, fz[2] + 3), 0, 2 * HALF + 12, 36, ms, seed=124)
 tex4.holo_text("sign4_finish", "FINISH", c1="#ffffff", c2="#ffd36b")
 A.text_panel(signs, (0, 26, fz[2]), 180, 34, 8, mat("sign4_finish", "sign4_finish", emit=2.4), curve=1.5)
 for sd in (-1, 1):
@@ -370,7 +370,7 @@ tex4.holo_text("sign4_title", "THE GRAND MARBLE RUN", w=1600, h=190, c1="#5ff2ff
 tex4.holo_text("sign4_walkin", "WALK IN - PICK YOUR MARBLE", w=1600, h=160, c1="#ffd36b", c2="#ffffff")
 tex4.holo_text("sign4_control", "RACE CONTROL", w=1024, h=270, c1="#ffd36b", c2="#ff7a2e", sub="CLICK - TYPE THE CODE")
 tex4.holo_text("sign4_standings", "STANDINGS", w=1024, h=160, c1="#5ff2ff", c2="#ffd36b")
-A.arch(station, (0, 0, -12), 90, 2 * HALF + 16, 34, ms, seed=7)
+A.arch(station, (0, 0, -12), 0, 2 * HALF + 16, 34, ms, seed=7)
 A.text_panel(station, (0, 22, -12), 180, 58, 6.8, mat("sign4_title", "sign4_title", emit=2.2), curve=1.8)
 A.text_panel(station, (0, 15.5, -12), 180, 40, 3.9, mat("sign4_walkin", "sign4_walkin", emit=2.0), curve=1.0)
 for sd in (-1, 1):

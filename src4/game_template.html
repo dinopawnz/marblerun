@@ -92,7 +92,7 @@
   const CANCEL_WINDOW = 10000;
   const LIGHT = 1;
 
-  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/1fdec039351a1c1e094a6aa33aa0882d2210889b/models4/";   // pinned to one upload: never an old copy
+  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/962891f6197ce24d93aca49450106dea6c4559e1/models4/";   // pinned to one upload: never an old copy
   const M = (n) => BASE + n + ".glb.gz";
 
   // the course, built in Blender from the same numbers (course.py in the repo)
@@ -308,6 +308,7 @@
   }
   // marbles[k] = the chains alive for marble k (one, or two during a hand-over)
   function rebuild(P) {
+    clearEffects();
     marbles.forEach((list) => list.forEach((c) => c.root.remove()));
     marbles = [];
     for (let k = 0; k < N; k++) {
@@ -391,6 +392,81 @@
     P.end = P.tLift + R.end * 1000 + 1500;
   }
 
+  // ==========================================================
+  // THE TRACK COMES ALIVE: walls light up in the colour of the marble going past, the floor leaves a
+  // trail of glowing rings behind every marble, and the tunnel's rings flash as the field pours through.
+  // All worked out from the physics in advance: just pieces added and removed at the right moments.
+  // ==========================================================
+  const fx = el("m-group", {});
+  const LIT_NEAR = 12, LIT_HOLD = 900, TRAIL_EVERY = 9, TRAIL_LIFE = 1600, FLARE_HOLD = 500;
+  function planEffects(P) {
+    const ev = [];      // [on time, off time, make()]
+    const segs = WORLD.glow.map((g) => {
+      const mx = (g.a[0] + g.b[0]) / 2, my = (g.a[1] + g.b[1]) / 2, mz = (g.a[2] + g.b[2]) / 2;
+      return Object.assign({ mx, my, mz, hits: [] }, g);
+    });
+    const cell = (x, z) => Math.floor(x / 30) + ":" + Math.floor(z / 30);
+    const grid = new Map();
+    segs.forEach((g) => { const c = cell(g.mx, g.mz); (grid.get(c) || grid.set(c, []).get(c)).push(g); });
+    const near = (x, z) => { const out = []; const cx = Math.floor(x / 30), cz = Math.floor(z / 30);
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) (grid.get((cx + a) + ":" + (cz + b)) || []).forEach((g) => out.push(g)); return out; };
+    const rings = (WORLD.tunnel || []).map((p) => ({ p, hits: [] }));
+    P.sim.marbles.forEach((sm, k) => {
+      const S = sm.samples;
+      let dist = 0, last = null;
+      for (let i = 0; i < S.length; i += 5) {
+        const s = S[i], t = P.tLift + s[0] * 1000;
+        if (sm.parkAt !== null && s[0] > sm.parkAt) break;
+        // walls near the marble
+        near(s[1], s[3]).forEach((g) => {
+          const ex = g.b[0] - g.a[0], ez = g.b[2] - g.a[2], L2 = ex * ex + ez * ez || 1;
+          const u = Math.max(0, Math.min(1, ((s[1] - g.a[0]) * ex + (s[3] - g.a[2]) * ez) / L2));
+          const d = Math.hypot(s[1] - (g.a[0] + ex * u), s[3] - (g.a[2] + ez * u));
+          if (d < LIT_NEAR && Math.abs(s[2] - (g.a[1] + (g.b[1] - g.a[1]) * u)) < 10) g.hits.push([t, k]);
+        });
+        rings.forEach((r) => { if (Math.hypot(s[1] - r.p[0], s[3] - r.p[2]) < 9) r.hits.push([t, k]); });
+        // glowing rings on the floor behind it
+        if (last) dist += Math.hypot(s[1] - last[1], s[3] - last[3]);
+        last = s;
+        if (dist >= TRAIL_EVERY && !s[6] && t > sm.samples[0][0] * 1000 + P.tLift + 500) {
+          dist = 0;
+          const gx = s[4], gz = s[5], n = Math.hypot(gx, 1, gz), nx = -gx / n, ny = 1 / n, nz = -gz / n;
+          const rz = Math.asin(-nx) * 180 / Math.PI, rx = Math.atan2(nz, ny) * 180 / Math.PI;
+          const at_ = { x: s[1], y: s[2] - (C_MR * (Math.sqrt(1 + gx * gx + gz * gz) - 1)) + 0.02, z: s[3], rx, rz };
+          ev.push([t, t + TRAIL_LIFE, () => el("m-model", Object.assign({ src: M("mr4_trail_" + COURSE.names[k].toLowerCase()), collide: "false", "cast-shadows": "false" }, at_), fx)]);
+        }
+      }
+    });
+    // a wall stays lit while marbles keep passing; it takes the colour of the first one in
+    const runs = (hits, hold, make) => {
+      hits.sort((a, b) => a[0] - b[0]);
+      let i = 0;
+      while (i < hits.length) {
+        const t0 = hits[i][0], k = hits[i][1];
+        let t1 = t0;
+        while (i < hits.length && hits[i][0] <= t1 + 600) { t1 = Math.max(t1, hits[i][0]); i++; }
+        ev.push([t0, t1 + hold, () => make(k)]);
+      }
+    };
+    segs.forEach((g) => {
+      const dx = g.b[0] - g.a[0], dy = g.b[1] - g.a[1], dz = g.b[2] - g.a[2], hor = Math.hypot(dx, dz), L = Math.hypot(hor, dy);
+      const ry = Math.atan2(dx, dz) * 180 / Math.PI, rx = -Math.atan2(dy, hor) * 180 / Math.PI;
+      runs(g.hits, LIT_HOLD, (k) => { const o = el("m-group", { x: g.mx, y: g.my, z: g.mz, ry }, fx);
+        el("m-model", { src: M("mr4_lit_" + COURSE.names[k].toLowerCase()), rx, sz: L / 10, collide: "false", "cast-shadows": "false" }, o); return o; });
+    });
+    rings.forEach((r) => runs(r.hits, FLARE_HOLD, () => el("m-model", { src: M("mr4_flare"), x: r.p[0], y: r.p[1], z: r.p[2], ry: COURSE.heading[COURSE.kinds.indexOf("tunnel")] + 180, collide: "false", "cast-shadows": "false" }, fx)));
+    return ev;
+  }
+  function scheduleEffects(P) {
+    planEffects(P).forEach(([t0, t1, make]) => {
+      let node = null;
+      at(t0, () => { if (plan === P) node = make(); });
+      at(t1, () => { if (node) { node.remove(); node = null; } });
+    });
+  }
+  function clearEffects() { while (fx.children && fx.children.length) fx.children[0].remove(); }
+  const C_MR = COURSE.mr;
+
   // where marble k is round the course at time t (for the boards)
   function progress(k, t) {
     if (!plan || !plan.ready) return 0;
@@ -472,6 +548,7 @@
       if (plan !== P) return;
       P.tries = tries;
       applySim(P, R);
+      scheduleEffects(P);
       // fresh chains all the way round. The first hand-over is while still on the lift; marbles
       // take turns, HAND_GAP apart, so no two hand-overs ever overlap.
       const order = P.m.map((m, k) => k).sort((a, b) => P.m[a].rel - P.m[b].rel);

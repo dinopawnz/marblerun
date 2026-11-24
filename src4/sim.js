@@ -233,9 +233,9 @@ function simulateRace(C, rnd, lift, tune) {
       M.forEach((m) => {
         if (!m.on) return;
         // a ball on a slope touches it a little above the point under its centre
-        let lift = 0;
-        if (!m.air) { const [, gx, gz] = surface(m); lift = MR * (Math.sqrt(1 + gx * gx + gz * gz) - 1); }
-        m.samples.push([Math.round(t * 1000) / 1000, m.x, m.y + lift, m.z]);
+        let lift = 0, gx = 0, gz = 0;
+        if (!m.air) { [, gx, gz] = surface(m); lift = MR * (Math.sqrt(1 + gx * gx + gz * gz) - 1); }
+        m.samples.push([Math.round(t * 1000) / 1000, m.x, m.y + lift, m.z, gx, gz, m.air ? 1 : 0]);
         if (m.secTime) m.secTime[m.sec] = (m.secTime[m.sec] || 0) + SAMPLE;
         m.secAt.push(m.sec);
         m.progress.push(m.finish === null ? progressOf(m) : 1e6 - m.finish);
@@ -244,7 +244,7 @@ function simulateRace(C, rnd, lift, tune) {
     }
     if (M.every((m) => m.phase === "parked")) {
       ended = t;
-      M.forEach((m) => { const last = m.samples[m.samples.length - 1]; if (last[0] < t - 1e-6) { m.samples.push([Math.round(t * 1000) / 1000 + 0.001, m.x, m.y, m.z]); m.progress.push(m.progress[m.progress.length - 1]); } });
+      M.forEach((m) => { const last = m.samples[m.samples.length - 1]; if (last[0] < t - 1e-6) { m.samples.push([Math.round(t * 1000) / 1000 + 0.001, m.x, m.y, m.z, 0, 0, 0]); m.progress.push(m.progress[m.progress.length - 1]); } });
       break;
     }
     t += DT;

@@ -27,7 +27,7 @@ const ctx = { window: win, document, Date: { now: () => clock }, Math, String, N
   clearTimeout(id) { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); }, clearInterval() {} };
 // the physics really takes time on the server: charge 400 ms per simulated race to the fake clock
 vm.createContext(ctx);
-vm.runInContext(script + ";globalThis.X={get plan(){return plan},get phase(){return phase},marbles:()=>marbles,COURSE,WORLD,boards,get errs(){return scriptErrors+' '+lastError},progress,bridge,HOST,get REMOTES(){return REMOTES},RIDERS,liveAnims,knotAt};", ctx);
+vm.runInContext(script + ";globalThis.X={get plan(){return plan},get phase(){return phase},marbles:()=>marbles,COURSE,WORLD,boards,get errs(){return scriptErrors+' '+lastError},progress,bridge,HOST,get REMOTES(){return REMOTES},RIDERS,liveAnims,knotAt,fx};", ctx);
 const X = ctx.X, C = X.COURSE;
 function advance(ms) {
   const end = clock + ms;
@@ -107,6 +107,7 @@ let maxAnims = 0, maxSolids = 0, maxJump = 0, jumpAt = "", maxOff = 0, offAt = "
 let noFloor = 0, split = 0, splitAt = "", late = 0, lateEx = "", doorMiss = 0, handovers = 0, shutSeen = false, bridgeGone = false;
 const seenAnims = new Set();
 let musicMiss = 0, musicStale = 0;
+const fxSeen = new Set(); let fxMax = 0, fxPerSec = 0, fxSecAdds = 0, fxSec = 0; const fxKinds = {};
 const prev = [];
 const SAMPLE = 100;
 while (X.phase !== "IDLE" || clock < P.tLift) {
@@ -158,6 +159,10 @@ while (X.phase !== "IDLE" || clock < P.tLift) {
       loud.forEach((a) => { const st = +a.attrs["start-time"], d = docNow(); if (d < st || d > st + 96048 + 150) musicStale++; });
     }
   }
+  const kids = X.fx.children;
+  fxMax = Math.max(fxMax, kids.length);
+  kids.forEach((n) => { if (!fxSeen.has(n)) { fxSeen.add(n); fxSecAdds++; const src = (n.attrs.src || (n.children[0] && n.children[0].attrs.src) || ""); const k = /lit_/.test(src) ? "wall" : /trail_/.test(src) ? "trail" : /flare/.test(src) ? "tunnel" : "?"; fxKinds[k] = (fxKinds[k] || 0) + 1; } });
+  if (Math.floor(tnow / 1000) !== fxSec) { fxPerSec = Math.max(fxPerSec, fxSecAdds); fxSecAdds = 0; fxSec = Math.floor(tnow / 1000); }
   if (clock - t0 > 900000) break;
 }
 const raceSecs = (P.end - P.tLift) / 1000;
@@ -181,6 +186,9 @@ ok(/WINS/.test(X.boards[0][0]._t), "the boards name the winner: " + X.boards[0][
 ok(musicMiss === 0, "race music: exactly one copy playing in every marble, the whole race (" + musicMiss + " gaps)");
 ok(musicStale === 0, "the song is restarted by the game every 96 s, so it never goes quiet (" + musicStale + " moments past the end)");
 ok(live().filter((n) => n.tagName === "M-AUDIO").length === 0, "the music stops when the race is over");
+ok((fxKinds.wall || 0) > 200 && (fxKinds.trail || 0) > 200 && (fxKinds.tunnel || 0) > 5, "the track comes alive: " + JSON.stringify(fxKinds) + " lights / trail rings / tunnel flashes in the race");
+ok(fxMax <= 80 && fxPerSec <= 30, "light pieces at once at most " + fxMax + ", added in one second at most " + fxPerSec + " (each also leaves: about twice that in changes, Check My Game warns above 60/s)");
+ok(X.fx.children.length === 0, "every light has gone out when the race is over");
 ok(X.errs.startsWith("0 "), "no script errors (" + X.errs + ")");
 
 // ---------- cancel ----------
