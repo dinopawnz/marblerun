@@ -188,8 +188,8 @@
   // the room riders stand in: a floor, four walls (the one facing the station is the door) and a lid
   const DOOR = 2;
   function side(i) {
-    const a = i * 90, r = a * Math.PI / 180, rc = 3.1 + 0.5;
-    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP + 7.2) / 2, ry: a, width: 7.2, height: 6, depth: 1 };
+    const a = i * 90, r = a * Math.PI / 180, rc = 2.9 + 0.5;
+    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP - 0.4 + 7.2) / 2, ry: a, width: 7.8, height: 6.4 + 0.4, depth: 1 };
   }
   // value of a coordinate at time t from its knots [[t, v], ...]
   function knotAt(K, t) {
@@ -237,13 +237,14 @@
     if (c.parts) return;
     c.parts = true;
     const k = c.k, pod = c.pod;
-    const floor = el("m-cylinder", Object.assign({}, SOLID, { y: FLOOR_TOP - 0.2, radius: 2.8, height: 0.4, "collision-interval": 1000 }), pod);
+    // the floor is a square slab that runs right under the walls: no gap anywhere for a rider to slip through
+    const floor = el("m-cube", Object.assign({}, SOLID, { y: FLOOR_TOP - 0.3, width: 7.8, height: 0.6, depth: 7.8, "collision-interval": 1000 }), pod);
     const seen = RIDERS[k] || (RIDERS[k] = new Map());       // who is standing in this marble (for the host remote)
     const touch = (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.set(id, Date.now()); };
     on(floor, "collisionstart", touch); on(floor, "collisionmove", touch);
     on(floor, "collisionend", (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.delete(id); });
     for (let i = 0; i < 4; i++) if (i !== DOOR) solid(side(i), pod);
-    solid({ y: 7.5, width: 8.2, height: 0.6, depth: 8.2 }, pod);
+    solid({ y: 7.5, width: 7.8, height: 0.6, depth: 7.8 }, pod);
     if (doorsShut) c.door = solid(side(DOOR), pod);
     addMusic(c, c.look ? MUSIC_VOL : 0);
   }

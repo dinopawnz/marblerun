@@ -191,6 +191,17 @@ ok(fxMax <= 80 && fxPerSec <= 30, "light pieces at once at most " + fxMax + ", a
 ok(X.fx.children.length === 0, "every light has gone out when the race is over");
 ok(X.errs.startsWith("0 "), "no script errors (" + X.errs + ")");
 
+// ---------- the riders' room is sealed ----------
+{
+  const pod = X.marbles()[0][0].pod, sol = pod.children.filter((c) => c.attrs.collide === "true");
+  const fl = sol.find((c) => c.attrs["collision-interval"]);
+  const half = +fl.attrs.width / 2, top = +fl.attrs.y + +fl.attrs.height / 2;
+  const walls = sol.filter((c) => c !== fl && +c.attrs.y < 6);
+  const inner = Math.min(...walls.map((w) => Math.hypot(+w.attrs.x || 0, +w.attrs.z || 0) - +w.attrs.depth / 2));
+  const wallBottom = Math.min(...walls.map((w) => +w.attrs.y - +w.attrs.height / 2));
+  ok(walls.length === 3 && half >= inner + 0.5 && wallBottom <= top - 0.2, "the riders' floor runs under every wall (floor half-width " + half + " m, walls from " + inner.toFixed(2) + " m, walls reach " + (top - wallBottom).toFixed(2) + " m below the floor top): no gaps");
+}
+
 // ---------- cancel ----------
 wrap.fire("prompt", { value: "2468" }); advance(60000);
 wrap.fire("prompt", { value: "2468" });
@@ -216,7 +227,7 @@ ok(acks() === "UNLOCKED" && board.attrs["visible-to"] === "9", "remote: the righ
 advance(1100);
 ok(game().ph === "idle" && game().online === 2, "remote: the board reports the game");
 host.fire("prompt", { value: "2468 start", connectionId: 9 });
-const floorOf = (k) => X.marbles()[k][0].pod.children.find((c) => c.tagName === "M-CYLINDER");
+const floorOf = (k) => X.marbles()[k][0].pod.children.find((c) => c.attrs["collision-interval"]);
 floorOf(2).fire("collisionstart", { connectionId: 3 }); floorOf(2).fire("collisionstart", { connectionId: 4 });
 advance(1100);
 ok(game().marbles[2].riders === 2, "remote: sees 2 riders in " + game().marbles[2].n);
