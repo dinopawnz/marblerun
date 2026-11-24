@@ -64,4 +64,5 @@ if "all" in which or "inside" in which:
     g = lanes[2][3]; p = [(g["a"][i] + g["b"][i]) / 2 for i in range(3)]
     d = C.D[g["run"]]
     shot("inside", (p[0] - d[0] * 1.5, p[1] + 2.9, p[2] - d[1] * 1.5), (p[0] + d[0] * 60, p[1] - 4, p[2] + d[1] * 60), 22)
+if "all" in which or "finish" in which: shot("finish", (22, 9, -30), (-4, 14, -62), 24)
 if "corner" in which: shot("corner", (240 + 60, 75, 300 + 50), (240, 44, 300), 26)
