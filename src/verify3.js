@@ -106,6 +106,7 @@ ok(P.winner === drawn, "the race that is run is won by the marble drawn at the s
 let maxAnims = 0, maxSolids = 0, maxJump = 0, jumpAt = "", maxOff = 0, offAt = "", sinkMax = 0, sinkAt = "", minGap = 99, gapAt = "";
 let noFloor = 0, split = 0, splitAt = "", late = 0, lateEx = "", doorMiss = 0, handovers = 0, shutSeen = false, bridgeGone = false;
 const seenAnims = new Set();
+let musicMiss = 0; const musicStarts = new Set();
 const prev = [];
 const SAMPLE = 100;
 while (X.phase !== "IDLE" || clock < P.tLift) {
@@ -150,6 +151,13 @@ while (X.phase !== "IDLE" || clock < P.tLift) {
     const d = Math.hypot(...pos[i].map((v, q) => v - pos[j][q]));
     if (d < minGap) { minGap = d; gapAt = i + "/" + j + " at " + ((tnow - P.tLift) / 1000).toFixed(1) + " s"; }
   }
+  if (tnow > P.tLift && tnow < P.m[P.winner].finish) {
+    for (let k = 0; k < 8; k++) {
+      const loud = X.marbles()[k].map((c) => c.pod.children.find((n) => n.tagName === "M-AUDIO")).filter((a) => a && +a.attrs.volume > 0);
+      if (loud.length !== 1) musicMiss++;
+      loud.forEach((a) => musicStarts.add(a.attrs["start-time"]));
+    }
+  }
   if (clock - t0 > 900000) break;
 }
 const raceSecs = (P.end - P.tLift) / 1000;
@@ -170,6 +178,8 @@ ok(minGap > 6.5, "marbles bump but never pass through each other (closest centre
 const home = C.homes.every((h, k) => Math.hypot(...podPos(k).map((v, j) => v - h[j])) < 0.01);
 ok(home && X.bridge.isConnected && animsNow() === 0, "all parked home, bridge back, every race animation gone (" + animsNow() + ")");
 ok(/WINS/.test(X.boards[0][0]._t), "the boards name the winner: " + X.boards[0][0]._t);
+ok(musicMiss === 0 && musicStarts.size === 1, "race music: exactly one copy playing in every marble all race, all in time (" + musicMiss + " gaps, " + musicStarts.size + " start times)");
+ok(live().filter((n) => n.tagName === "M-AUDIO").length === 0, "the music stops when the race is over");
 ok(X.errs.startsWith("0 "), "no script errors (" + X.errs + ")");
 
 // ---------- cancel ----------
@@ -207,6 +217,10 @@ advance(X.plan.end - clock + 1000);
 ok(X.phase === "IDLE" && game().nextAt > clock, "remote: AUTO queues the next race when one ends");
 advance(X.HOST.gap * 1000 + 100);
 ok(X.phase === "BOARDING", "remote: the next race boards by itself");
+host.fire("prompt", { value: "2468 music off", connectionId: 9 });
+ok(acks() === "RACE MUSIC OFF" && live().filter((n) => n.tagName === "M-AUDIO").length === 0, "remote: MUSIC OFF silences every marble");
+host.fire("prompt", { value: "2468 music on", connectionId: 9 });
+ok(live().filter((n) => n.tagName === "M-AUDIO").length === 8, "remote: MUSIC ON brings it back");
 host.fire("prompt", { value: "2468 auto off", connectionId: 9 });
 host.fire("prompt", { value: "2468 cancel", connectionId: 9 }); advance(500);
 ok(X.phase === "IDLE" && animsNow() === 0, "remote: CANCEL sends everything home");

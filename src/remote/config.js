@@ -27,6 +27,7 @@
       p = R.panel(R.left, "Running it", "set it and forget it");
       g = R.grid(p);
       ui.autoB = R.btn(g, "AUTO RACES: OFF", "start a new race by itself after each one", () => R.say(ui.auto ? "auto off" : "auto on"), { cls: "big1" });
+      ui.musicB = R.btn(g, "RACE MUSIC: ON", "the music playing inside the marbles", () => R.say(ui.music ? "music off" : "music on"), { cls: "big1" });
       ui.kioskB = R.btn(g, "KIOSKS: ON", "the RACE CONTROL kiosks at the station", () => R.say(ui.kiosks ? "kiosks off" : "kiosks on"), { cls: "big1" });
       ui.gapC = R.choices(p, "Wait between auto races", [[15, "15 s"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [300, "5 min"]], (v) => R.say("gap " + v), (v) => v + " s");
       ui.boardC = R.choices(p, "Boarding time (how long the bridge is open)", [[10, "10 s"], [20, "20 s"], [30, "30 s"], [45, "45 s"], [60, "1 min"]], (v) => R.say("board " + v), (v) => v + " s");
@@ -77,6 +78,8 @@
       setText(ui.st.online, G.online); setText(ui.st.in, inMarbles); setText(ui.st.board, G.board + " s"); setText(ui.st.winner, ui.lastWinner || "-");
       R.lit(ui.startB, G.ph === "boarding");
       setText(ui.autoB.lab, "AUTO RACES: " + (G.auto ? "ON" : "OFF")); R.lit(ui.autoB, G.auto);
+      ui.music = G.music !== false;
+      setText(ui.musicB.lab, "RACE MUSIC: " + (ui.music ? "ON" : "OFF")); R.lit(ui.musicB, ui.music);
       setText(ui.kioskB.lab, "KIOSKS: " + (G.kiosks ? "ON" : "OFF")); ui.kioskB.className = "btn big1 " + (G.kiosks ? "b-go" : "b-warn");
       ui.gapC.set(G.gap); ui.boardC.set(G.board);
       const ms = (G.marbles || []).slice();

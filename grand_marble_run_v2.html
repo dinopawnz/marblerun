@@ -83,6 +83,9 @@
   const TOL_XZ = 0.5, TOL_Y = 0.15;  // how closely the glides follow the physics (metres)
   const CHAIN_SECONDS = 11;         // each marble gets a fresh chain of glides this often
   const HAND_AHEAD = 600, HAND_SOLID = 250, HAND_SWAP = 1200;   // ms: made early, solid, swapped
+  // race music inside every marble (an original track, a seamless 96 s loop; src/music.py made it)
+  const MUSIC_SRC = "https://raw.githubusercontent.com/dinopawnz/marblerun/5e33302d8e8834cb89feb7024ca22d419434a08d/audio/race_theme.mp3";
+  const MUSIC_VOL = 0.55;
   const HAND_GAP = CHAIN_SECONDS * 1000 / 8;   // ms between one marble's hand-over and the next's
   const CANCEL_WINDOW = 10000;
   const LIGHT = 1;
@@ -216,7 +219,7 @@
       });
     }
     const pod = el("m-group", {}, g);
-    return { k, root, pod, S, E, anims, parts: false, look: false, door: null };
+    return { k, root, pod, S, E, anims, parts: false, look: false, door: null, racing: !!P };
   }
   // the floor, walls and lid riders are held by
   function addSolids(c) {
@@ -231,11 +234,26 @@
     for (let i = 0; i < 4; i++) if (i !== DOOR) solid(side(i), pod);
     solid({ y: 7.5, width: 8.2, height: 0.6, depth: 8.2 }, pod);
     if (doorsShut) c.door = solid(side(DOOR), pod);
+    addMusic(c, c.look ? MUSIC_VOL : 0);
+  }
+  // every marble plays the same track from the same moment, so they are always in time with each
+  // other; a new chain's copy starts silent (so it is loaded and in step) and is turned up at the swap
+  function addMusic(c, vol) {
+    if (!HOST.music || !plan || !c.racing || c.music) return;
+    c.music = el("m-audio", { src: MUSIC_SRC, y: MR, loop: "true", volume: vol, "start-time": Math.round(plan.musicAt) }, c.pod);
+  }
+  function setMusic(on) {
+    HOST.music = on;
+    marbles.forEach((list) => list.forEach((c) => {
+      if (on && c.parts) addMusic(c, c.look ? MUSIC_VOL : 0);
+      if (!on && c.music) { c.music.remove(); c.music = null; }
+    }));
   }
   // what you see: the pod and the glass, facing the way it rolls, spinning at its speed
   function addLooks(c, P) {
     if (c.look) return;
     c.look = true;
+    if (c.music) c.music.setAttribute("volume", String(MUSIC_VOL));
     const k = c.k, pod = c.pod;
     el("m-model", { src: M("mr_pod_" + COURSE.names[k].toLowerCase()), "cast-shadows": "false" }, pod);
     let ry = COURSE.heading[0], speed = 0;
@@ -586,7 +604,7 @@
     const now = Date.now(), d0 = docNow();
     const tLift = now + (HOST.board + CLOSE_SECONDS) * 1000;
     const lift = []; for (let k = 0; k < N; k++) lift.push(Math.round(rand(LIFT_SECONDS[0], LIFT_SECONDS[1]) * 1000));
-    const P = { winner: Math.floor(Math.random() * N) % N, tLift, lift, tRace: tLift + Math.min(...lift), announced: false, ready: false,
+    const P = { winner: Math.floor(Math.random() * N) % N, tLift, lift, musicAt: d0 + 300, tRace: tLift + Math.min(...lift), announced: false, ready: false,
       solveBy: tLift + Math.min(...lift) - 16000, doc: (t) => d0 + (t - now), tries: 0 };
     // until the physics is worked out, every marble's path is just the lift
     P.m = lift.map((L, k) => {
@@ -679,7 +697,7 @@
   // GAME FLOW
   // ==========================================================
   let phase = "IDLE";     // IDLE | BOARDING | RACE
-  const HOST = { board: BOARD_SECONDS, auto: false, gap: AUTO_GAP_SECONDS, kiosks: true, nextAt: 0, nextT: 0 };
+  const HOST = { music: true, board: BOARD_SECONDS, auto: false, gap: AUTO_GAP_SECONDS, kiosks: true, nextAt: 0, nextT: 0 };
   let plan = null, timers = [], cancelArmedUntil = 0;
   function at(t, fn) { timers.push(later(fn, t - Date.now())); }
   function clearTimers() { timers.forEach((h) => clearTimeout(h)); timers = []; }
@@ -793,7 +811,7 @@
     const order = P && P.ready && t >= P.tRace ? standings(t) : null;
     const g = {
       now: t, ph, ev: ack.l.length ? ack.l[ack.l.length - 1].t : "",
-      board: HOST.board, auto: HOST.auto, gap: HOST.gap, kiosks: HOST.kiosks, nextAt: HOST.nextAt || 0,
+      board: HOST.board, music: HOST.music, auto: HOST.auto, gap: HOST.gap, kiosks: HOST.kiosks, nextAt: HOST.nextAt || 0,
       online: ONLINE.size, errors: scriptErrors, lastError,
       closeAt: P ? P.tLift - CLOSE_SECONDS * 1000 : 0, liftAt: P ? P.tLift : 0, raceAt: P ? P.tRace : 0, endAt: P && P.end ? P.end : 0,
       winner: P && P.announced ? COURSE.names[P.winner] : "",
@@ -838,6 +856,11 @@
       const a = (parts[1] || "").toLowerCase();
       HOST.kiosks = a === "on" ? true : a === "off" ? false : !HOST.kiosks;
       return HOST.kiosks ? "RACE CONTROL KIOSKS ON" : "RACE CONTROL KIOSKS OFF - ONLY THE REMOTE STARTS RACES";
+    }
+    if (cmd === "music") {
+      const a = (parts[1] || "").toLowerCase();
+      setMusic(a === "on" ? true : a === "off" ? false : !HOST.music);
+      return HOST.music ? "RACE MUSIC ON" : "RACE MUSIC OFF";
     }
     if (cmd === "say") {
       const text = rest.slice(3).trim().toUpperCase().replace(/[^A-Z0-9 !?.,'&:+-]/g, "").slice(0, 28);
