@@ -42,7 +42,7 @@ SLOPE = {"drop": 0.12, "waves": 0.05, "pinball": 0.085, "jump": 0.09, "bumpers":
 CORNER_SLOPE = 0.04
 BANK = 20.0                          # how high the corner bowls rise at their outer wall (at the middle of the turn)
 LEDGE = 3.0
-STAIRS = (60, 100, 140)              # stair drops (distance from the start of the run's deck)
+STAIRS = (30, 64, 98)                # stair drops (distance from the start of the run's deck; the deck is 124 m long)
 WAVE_A, WAVE_L = 0.8, 36.0           # the waves: height and length of each roller
 JUMP_UP, JUMP_AT, JUMP_LEN, JUMP_DROP = 1.0, 80.0, 9.0, 5.0   # kicker: rises JUMP_UP over JUMP_LEN, lip at JUMP_AT, then a JUMP_DROP fall
 PLUNGE_END = 190                     # THE PLUNGE reaches the ground here (run 13, centreline distance)
@@ -58,6 +58,7 @@ BUMPERS = [(44, -18, 3.0), (44, 18, 3.0), (74, 0, 3.4), (128, -20, 3.0), (128, 2
 FUNNEL = [(10, 38), (48, 16), (62, 16), (100, 38)]                                                                       # THE FUNNEL: (s, |u|)
 SPLIT = (20, 120)                                                                                                        # THE SPLIT
 SPLIT_R = 0.7
+WALL_T = 0.7                         # half the thickness of the rails standing ON the deck (funnel, split): marbles bounce off their faces
 
 
 def unit(dx, dz):
@@ -211,9 +212,9 @@ def sections():
         if k == "funnel":
             for side in (-1, 1):
                 pts = [run_xz(i, t0 + s, side * u) for s, u in FUNNEL]
-                walls += [r2(a + b) for a, b in zip(pts, pts[1:])]
+                walls += [r2(a + b) + [WALL_T] for a, b in zip(pts, pts[1:])]
         if k == "split":
-            walls.append(r2(run_xz(i, t0 + SPLIT[0], 0) + run_xz(i, t0 + SPLIT[1], 0)))
+            walls.append(r2(run_xz(i, t0 + SPLIT[0], 0) + run_xz(i, t0 + SPLIT[1], 0)) + [WALL_T])
             circles += [r2(run_xz(i, t0 + s, 0) + [SPLIT_R, 0.5]) for s in SPLIT]
         out.append({"type": "run", "i": i, "P": list(P[i]), "d": list(d), "n": list(n), "t0": t0, "t1": t1,
                     "prof": [r2(p) for p in profile(i)], "mu": MUD_MU if k == "swamp" else 0.012,

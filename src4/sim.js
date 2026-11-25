@@ -68,6 +68,44 @@ function simulateRace(C, rnd, lift, tune) {
     }
   }
 
+  // ---- ledges (a run's sudden drops): a marble going over one rolls round its edge like a real ball,
+  //      instead of its body passing into the cliff
+  S.forEach((s) => {
+    s.ledges = [];
+    if (s.type !== "run") return;
+    for (let q = 0; q < s.prof.length - 1; q++) {
+      const a = s.prof[q], b = s.prof[q + 1];
+      if (Math.abs(b[0] - a[0]) < 0.01 && a[1] - b[1] > 0.5) s.ledges.push([a[0], a[1]]);
+    }
+  });
+  function ledge(m) {
+    const s = S[m.sec];
+    if (s.type !== "run" || !s.ledges.length) return;
+    const t = loc(s, m.x, m.z)[0];
+    for (const [te, ye] of s.ledges) {
+      const dt = t - te, dy = m.y + MR - ye, d = Math.hypot(dt, dy);
+      if (dt < 0 || dt > MR || d >= MR || d < 1e-6) continue;      // (only ever forward, off the edge)
+      const nt = dt / d, ny = dy / d, push = MR - d;
+      m.x += s.d[0] * nt * push; m.z += s.d[1] * nt * push; m.y += ny * push;
+      const vt = m.vx * s.d[0] + m.vz * s.d[1], vn = vt * nt + m.vy * ny;
+      if (vn < 0) { m.vx -= vn * nt * s.d[0]; m.vz -= vn * nt * s.d[1]; m.vy -= vn * ny; }
+    }
+  }
+
+  // the cliff under a ledge: a marble down on the lower deck can't roll back in under it
+  function cliff(m) {
+    const s = S[m.sec];
+    if (s.type !== "run" || !s.ledges.length) return;
+    const t = loc(s, m.x, m.z)[0];
+    for (const [te, ye] of s.ledges) {
+      if (m.y > ye - 0.3 || t >= te + MR || t < te - 30) continue;
+      const push = te + MR - t;
+      m.x += s.d[0] * push; m.z += s.d[1] * push;
+      const vt = m.vx * s.d[0] + m.vz * s.d[1];
+      if (vt < 0) { m.vx -= (1 + E_WALL) * vt * s.d[0]; m.vz -= (1 + E_WALL) * vt * s.d[1]; m.bumps++; }
+    }
+  }
+
   // ---- collisions with the course
   function hitPoint(m, cx, cz, rad, e) {        // round post (or a wall's nearest point)
     const dx = m.x - cx, dz = m.z - cz, d = Math.hypot(dx, dz), min = MR + rad;
@@ -88,7 +126,7 @@ function simulateRace(C, rnd, lift, tune) {
     const ex = bx - ax, ez = bz - az, L2 = ex * ex + ez * ez;
     let u = ((m.x - ax) * ex + (m.z - az) * ez) / L2;
     u = Math.max(0, Math.min(1, u));
-    hitPoint(m, ax + ex * u, az + ez * u, 0, e);
+    hitPoint(m, ax + ex * u, az + ez * u, w[4] || 0, e);     // (w[4]: half the rail's thickness)
   }
   function collideCourse(m) {
     for (let q = Math.max(0, m.sec - 1); q <= Math.min(LAST, m.sec + 1); q++) {
@@ -157,7 +195,16 @@ function simulateRace(C, rnd, lift, tune) {
       if (m.phase === "race" && !m.air) {
         // a marble that has come to rest is shaken loose (as a real track's vibration would)
         m.slow = sp < 0.4 ? (m.slow || 0) + DT : 0;
-        if (m.slow > 3) { m.slow = 0; m.vx += gauss() * 2.5; m.vz += gauss() * 2.5; }
+        // (or one rocking back and forth without getting anywhere)
+        const pg = progressOf(m);
+        if (m.best === undefined || pg > m.best + 2) { m.best = pg; m.bestAt = t; }
+        else if (t - m.bestAt > 6) { m.slow = 99; m.bestAt = t; }
+        if (m.slow > 3) {
+          m.slow = 0;
+          const sd = S[m.sec];
+          if (sd.type === "run") { const f = 3 + rnd() * 3; m.vx += sd.d[0] * f + gauss() * 1.2; m.vz += sd.d[1] * f + gauss() * 1.2; }   // on down the run
+          else { m.vx += gauss() * 2.5; m.vz += gauss() * 2.5; }
+        }
         // track imperfections: a gentle wandering push
         const c = Math.sqrt(2 * DT / NOISE_TAU) * NOISE;
         m.nx += -m.nx * DT / NOISE_TAU + c * gauss(); m.nz += -m.nz * DT / NOISE_TAU + c * gauss();
@@ -193,6 +240,7 @@ function simulateRace(C, rnd, lift, tune) {
       const [y0] = surface(m);
       m.x += m.vx * DT; m.z += m.vz * DT;
       updateSection(m);
+      cliff(m);
       const [y1] = surface(m);
       if (m.air) {
         m.vy -= G * DT; m.y += m.vy * DT;
@@ -201,6 +249,7 @@ function simulateRace(C, rnd, lift, tune) {
         m.air = true; m.vy = (y1 - y0) / DT > -2 ? (y1 - y0) / DT : 0;
         m.vy = Math.max(m.vy, -1); m.vy -= G * DT; m.y += m.vy * DT;
       } else { m.vy = (y1 - m.y) / DT; m.y = y1; }
+      if (m.air) ledge(m);
       collideCourse(m);
     });
     // marble on marble (marbles still on the lift and parked ones don't move)
@@ -234,7 +283,15 @@ function simulateRace(C, rnd, lift, tune) {
         if (!m.on) return;
         // a ball on a slope touches it a little above the point under its centre
         let lift = 0, gx = 0, gz = 0;
-        if (!m.air) { [, gx, gz] = surface(m); lift = MR * (Math.sqrt(1 + gx * gx + gz * gz) - 1); }
+        if (!m.air) {
+          [, gx, gz] = surface(m);
+          const sc = S[m.sec];
+          if (sc.type === "corner") {        // the bowl's full tilt (the forces above only use part of it)
+            gx = (cornerY(sc, m.x + 0.25, m.z) - cornerY(sc, m.x - 0.25, m.z)) / 0.5;
+            gz = (cornerY(sc, m.x, m.z + 0.25) - cornerY(sc, m.x, m.z - 0.25)) / 0.5;
+          }
+          lift = MR * (Math.sqrt(1 + gx * gx + gz * gz) - 1);
+        }
         m.samples.push([Math.round(t * 1000) / 1000, m.x, m.y + lift, m.z, gx, gz, m.air ? 1 : 0]);
         if (m.secTime) m.secTime[m.sec] = (m.secTime[m.sec] || 0) + SAMPLE;
         m.secAt.push(m.sec);

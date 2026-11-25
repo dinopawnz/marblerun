@@ -67,6 +67,16 @@ def crystal_cluster(me, c, size, m, seed=0, n=7):
         shard(me, (c[0] + math.sin(a) * d, c[1] - 0.1, c[2] + math.cos(a) * d), size * rnd.uniform(0.35, 0.75), size * rnd.uniform(0.07, 0.12), m, lean, seed=seed + k + 1)
 
 
+def crystal_spire(me, c, size, m, R, seed=0, n=5):
+    """a tight cluster of tall crystals, all inside radius R of the axis (what the marbles bounce off)"""
+    rnd = random.Random(seed)
+    shard(me, c, size, R * 0.78, m, (0, 0), seed=seed, sides=6, tip=0.3)
+    for k in range(n - 1):
+        a = k / (n - 1) * 6.283 + rnd.uniform(-0.3, 0.3)
+        d, r = R * 0.5, R * 0.36
+        shard(me, (c[0] + math.sin(a) * d, c[1] - 0.05, c[2] + math.cos(a) * d), size * rnd.uniform(0.45, 0.75), r, m, (0, 0), seed=seed + k + 1, sides=5, tip=0.35)
+
+
 def mushroom(me, c, h, cap_r, capm, seed=0, bend=0.6, stem_r=None, gills=True):
     """a giant glowing mushroom: a curved stem and a domed cap with gills underneath"""
     rnd = random.Random(seed)
@@ -197,9 +207,9 @@ def island(me, c, r, ms, seed=0):
 def jelly(me, c, r, ms, seed=0, tent=8):
     """a floating jellyfish-lantern: a glowing bell and trailing tentacles"""
     prof = [(r * 0.02, r * 0.9), (r * 0.45, r * 0.82), (r * 0.8, r * 0.55), (r * 1.0, r * 0.15), (r * 0.92, 0.0), (r * 0.7, r * 0.12)]
-    me.lathe(prof, ms["jelly"], c=c, seg=24, wobble=0.04, seed=seed)
+    me.lathe(prof[::-1], ms["jelly"], c=c, seg=24, wobble=0.04, seed=seed)       # (bottom to top: faces outward)
     inner = [(r * 0.02, r * 0.55), (r * 0.35, r * 0.45), (r * 0.4, r * 0.2), (r * 0.02, r * 0.15)]
-    me.lathe(inner, ms["glowm"], c=c, seg=12)
+    me.lathe(inner[::-1], ms["glowm"], c=c, seg=12)
     for k in range(tent):
         a = k / tent * 6.283
         d = r * 0.7
@@ -238,25 +248,38 @@ def pylon(me, c, r, h, ms, seed=0):
     me.lathe(base, ms["white"], c=c, seg=16)
     shard(me, (c[0], c[1] + 0.9, c[2]), h, r * 0.95, ms["cry"], seed=seed, sides=6, tip=0.3)
     halo = [(r * 1.6 * math.cos(k / 6 * 6.283) * 0.18, r * 1.6 * math.sin(k / 6 * 6.283) * 0.18) for k in range(6)]
-    path = [(c[0] + r * 1.7 * math.sin(k / 24 * 6.283), c[1] + h * 0.72, c[2] + r * 1.7 * math.cos(k / 24 * 6.283)) for k in range(25)]
+    path = [(c[0] + r * 1.7 * math.sin(k / 24 * 6.283), c[1] + max(h * 0.72, 2 * 4.0 + 1.5), c[2] + r * 1.7 * math.cos(k / 24 * 6.283)) for k in range(25)]   # (above the marbles)
     me.sweep(path, [(0.14 * math.cos(k / 6 * 6.283), 0.14 * math.sin(k / 6 * 6.283)) for k in range(6)], ms["glowg"])
 
 
-def arch(me, c, ry, span, height, ms, seed=0):
-    """an organic arch over the track: two curving ribs that meet overhead, with glowing veins"""
+def arch_y(span, height, leg, x):
+    """height of the arch's rib above the base at distance x from the middle"""
+    if abs(x) >= span / 2:
+        return leg
+    return leg + (height - leg) * math.sqrt(max(0.0, 1 - (2 * x / span) ** 2))
+
+
+def arch(me, c, ry, span, height, ms, seed=0, leg=0.0):
+    """an organic arch over the track: two ribs that stand straight up beside the track to `leg`, then
+    curve in and meet overhead at `height` (so over the deck it is never narrower than `span`)"""
     cy, sy = math.cos(math.radians(ry)), math.sin(math.radians(ry))
     def W(x, y, z=0.0):
         return (c[0] + x * cy + z * sy, c[1] + y, c[2] - x * sy + z * cy)
+    NL = max(2, int(leg / 8)) if leg > 0 else 0
     for side in (-1, 1):
         path = []
+        for q in range(NL):                                  # the straight leg (a gentle organic sway)
+            y = leg * q / NL
+            path.append(W(side * (span / 2 + 0.5 * math.sin(q * 1.7 + seed)), y, side * 0.4 * math.sin(q * 1.1)))
         for q in range(17):
             f = q / 16
             a = f * math.pi / 2
-            x = side * span / 2 * math.cos(a) * (1 + 0.08 * math.sin(f * 3.1))
-            y = height * math.sin(a)
+            x = side * span / 2 * math.cos(a) * (1 + 0.04 * math.sin(f * 3.1))
+            y = leg + (height - leg) * math.sin(a)
             path.append(W(x, y, side * 0.6 * math.sin(f * 3.1)))
+        n = len(path)
         me.sweep(path, [(1.0 * math.cos(k / 8 * 6.283) * (1 + 0.25 * (k % 2)), 1.0 * math.sin(k / 8 * 6.283)) for k in range(8)], ms["bark"],
-                 scale=[1.8 - 1.1 * q / 16 for q in range(17)], vrep=4, twist=2.0)
+                 scale=[1.8 - 1.1 * q / (n - 1) for q in range(n)], vrep=4 * n / 17, twist=2.0 * n / 17)
         # a glowing vine wound round each rib
         vine = [(p[0] + 1.4 * math.sin(q * 1.3), p[1] + 1.2 * math.cos(q * 1.3), p[2]) for q, p in enumerate(path)]
         me.sweep(vine, [(0.16 * math.cos(k / 4 * 6.283), 0.16 * math.sin(k / 4 * 6.283)) for k in range(4)], ms["glowc"] if side > 0 else ms["glowm"])

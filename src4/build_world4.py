@@ -24,6 +24,26 @@ props = []            # (model, x, y, z, ry, scale, animated?)
 glow_segs = []        # rail segments that light up: {a:[x,y,z], b:[x,y,z], run/sec, side}
 
 
+LIFT_G = C.LIFT_TOP / C.LEN[0]
+LIFT_SINK = MR * (math.sqrt(1 + LIFT_G ** 2) - 1)       # 1.1 m: the marbles ride the lift this far above its deck line
+
+
+def vis_h(i, t):
+    """the deck height to DRAW (the lift is drawn lower, so the marbles going up don't sink into it)"""
+    y = C.height(i, t)
+    return max(0.0, y - LIFT_SINK) if C.KIND[i] == "lift" else y
+
+
+def face_to(me, pts, m, uv, want):
+    """a face pointing along `want` (Otherside draws one side only)"""
+    ax, ay, az = pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]
+    bx, by, bz = pts[2][0] - pts[0][0], pts[2][1] - pts[0][1], pts[2][2] - pts[0][2]
+    n = (ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+    if n[0] * want[0] + n[1] * want[1] + n[2] * want[2] < 0:
+        pts, uv = pts[::-1], (uv[::-1] if uv else uv)
+    me.face(pts, m, uv)
+
+
 def rp(i, t, u, y):
     return C.run_point(i, t, u, y)
 
@@ -42,6 +62,9 @@ for i in range(C.N):
     pr = C.profile(i)
     for (ta, ya), (tb, yb) in zip(pr, pr[1:]):
         if tb - ta > 0.01:
+            if C.KIND[i] == "lift":
+                ta = LIFT_SINK / LIFT_G                    # the lowered ramp comes out of the ground just ahead of the parked marbles
+                ya, yb = vis_h(i, ta), vis_h(i, tb)
             pieces.append((i, ta, ya, tb, yb))
 
 
@@ -98,11 +121,11 @@ def deck_piece(i, t0, y0, t1, y1):
             top = [rp(i, t, -HALF, y), rp(i, t, HALF, y)]
             poly = [top[0]] + ring[::-1] if False else ring
             cen = rp(i, t, 0, y - 1.4)
+            d = C.D[i]
+            want = (d[0], 0, d[1]) if rev else (-d[0], 0, -d[1])
             for j in range(len(ring) - 1):
-                tri = [cen, ring[j], ring[j + 1]]
-                track.face(tri[::-1] if rev else tri, ms["cryp"], [(0.5, 0.5), (j / 10, 0), ((j + 1) / 10, 0)])
-            tri = [cen, ring[-1], ring[0]]
-            track.face(tri[::-1] if rev else tri, ms["cryp"], [(0.5, 0.5), (1, 1), (0, 1)])
+                face_to(track, [cen, ring[j], ring[j + 1]], ms["cryp"], [(0.5, 0.5), (j / 10, 0), ((j + 1) / 10, 0)], want)
+            face_to(track, [cen, ring[-1], ring[0]], ms["cryp"], [(0.5, 0.5), (1, 1), (0, 1)], want)
     # the walkable solid (not on the steep lift)
     if C.KIND[i] != "lift":
         for q in range(n):
@@ -115,6 +138,11 @@ def deck_piece(i, t0, y0, t1, y1):
 
 for p in pieces:
     deck_piece(*p)
+# where the lowered lift deck meets the drop: a short riser (faces the oncoming marbles)
+_a, _b = LIFT_SINK, 0.0
+for u0, u1 in ((-HALF, HALF),):
+    q = [rp(0, C.LEN[0], u0, C.LIFT_TOP - LIFT_SINK), rp(0, C.LEN[0], u1, C.LIFT_TOP - LIFT_SINK), rp(0, C.LEN[0], u1, C.LIFT_TOP), rp(0, C.LEN[0], u0, C.LIFT_TOP)]
+    face_to(track, q, ms["lift"], [(0, 0), (1, 0), (1, 0.05), (0, 0.05)], (-C.D[0][0], 0.3, -C.D[0][1]))
 
 
 # ---------------------------------------------------------------- crystal rails
@@ -126,7 +154,7 @@ def rail_shape(w, h):
 SH = rail_shape(RAIL_W, RAIL_H)
 
 
-def rail_along(points, m, sprout=True, seed=0, glow=None, solid=True):
+def rail_along(points, m, sprout=True, seed=0, glow=None, solid=True, inside=None):
     """a crystal wall along a list of points (MML), crystal shards sprouting from it now and then"""
     rings = []
     for q, p in enumerate(points):
@@ -155,13 +183,34 @@ def rail_along(points, m, sprout=True, seed=0, glow=None, solid=True):
                 acc = r.uniform(-3, 0)
                 f = r.random()
                 p = [a[k] + (b[k] - a[k]) * f for k in range(3)]
-                A.shard(track, (p[0], p[1] + RAIL_H * 0.6, p[2]), r.uniform(1.6, 4.2), r.uniform(0.25, 0.45), m,
-                        (r.uniform(-0.25, 0.25), r.uniform(-0.25, 0.25)), sides=5, seed=r.randrange(10000))
+                # outward: away from the track side of the rail
+                tx, tz = b[0] - a[0], b[2] - a[2]
+                L = math.hypot(tx, tz) or 1
+                ox, oz = -tz / L, tx / L
+                if inside is not None:
+                    ip = inside(p)
+                    if (p[0] - ip[0]) * ox + (p[2] - ip[1]) * oz < 0:
+                        ox, oz = -ox, -oz
+                lean = r.uniform(0.08, 0.32)
+                along = r.uniform(-0.12, 0.12)
+                h = r.uniform(1.6, 4.2)
+                base = (p[0] + ox * RAIL_W * 0.2, p[1] + RAIL_H * 0.6, p[2] + oz * RAIL_W * 0.2)
+                A.shard(track, base, h, r.uniform(0.25, 0.4), m,
+                        (ox * lean + tx / L * along, oz * lean + tz / L * along), sides=5, seed=r.randrange(10000))
+
+
+def run_center(i):
+    """for rail_along(inside=...): the point on run i's centre line level with p"""
+    def f(p):
+        d = C.D[i]
+        t = (p[0] - C.P[i][0]) * d[0] + (p[2] - C.P[i][1]) * d[1]
+        return (C.P[i][0] + d[0] * t, C.P[i][1] + d[1] * t)
+    return f
 
 
 def run_edge(i, t0, t1, u, step=4.0):
     n = max(1, int(math.ceil((t1 - t0) / step)))
-    return [rp(i, t0 + (t1 - t0) * q / n, u, hgt(i, t0 + (t1 - t0) * q / n + 1e-6)) for q in range(n + 1)]
+    return [rp(i, t0 + (t1 - t0) * q / n, u, vis_h(i, t0 + (t1 - t0) * q / n + 1e-6)) for q in range(n + 1)]
 
 
 def glow_line(points, tag, seglen=10.0):
@@ -190,7 +239,7 @@ for i in range(C.N):
             if c1 - c0 < 2:
                 continue
             pts = run_edge(i, c0 + 0.02, c1 - 0.02, side * (HALF + RAIL_W / 2))
-            rail_along(pts, RAILM.get(C.KIND[i], ms["cry"] if (i + (side > 0)) % 2 else ms["cryp"]), seed=i * 10 + side)
+            rail_along(pts, RAILM.get(C.KIND[i], ms["cry"] if (i + (side > 0)) % 2 else ms["cryp"]), seed=i * 10 + side, inside=run_center(i))
             if i > 0:
                 glow_line(pts, "r%d%s" % (i, "L" if side < 0 else "R"))
 
@@ -214,7 +263,7 @@ for j in range(C.N):
     # the crystal rail round the rim (no solid on the bowl itself: it would reach into a marble's room)
     rim = [C.corner_point(c, math.pi / 2 * qa / (NA * 2), R + RAIL_W / 2) for qa in range(NA * 2 + 1)]
     rim = [(p[0], C.corner_point(c, math.pi / 2 * qa / (NA * 2), R)[1], p[2]) for qa, p in enumerate(rim)]
-    rail_along(rim, ms["cryp"] if j % 2 else ms["cry"], seed=j * 7, solid=False)
+    rail_along(rim, ms["cryp"] if j % 2 else ms["cry"], seed=j * 7, solid=False, inside=lambda p, I=c["I"]: I)
     glow_line(rim, "c%d" % j, 9.0)
     # pillars under the bowl
     for a, r in ((math.pi / 4, 0.3 * R), (math.pi / 4, 0.72 * R), (0.3, 0.6 * R), (math.pi / 2 - 0.3, 0.6 * R), (math.pi / 4, 0.95 * R)):
@@ -275,12 +324,12 @@ for i in range(1, C.N):
     if k == "pinball":
         for q, (s, u) in enumerate(C.PEGS):
             p = deck_pt(i, s, u)
-            A.pylon(track, p, C.PEG_R, 6.5, ms, seed=q)
+            A.pylon(track, p, C.PEG_R, 10.0, ms, seed=q)
             colm.tube([A.ring((p[0], p[1], p[2]), C.PEG_R, 8), A.ring((p[0], p[1] + 6, p[2]), C.PEG_R, 8)], CM, cap0=CM, cap1=CM)
     if k == "forest":
         for q, (s, u) in enumerate(C.FOREST):
             p = deck_pt(i, s, u)
-            A.crystal_cluster(track, p, 9, ms["cryp"] if q % 2 else ms["cry"], seed=q + 50, n=6)
+            A.crystal_spire(track, p, 11, ms["cryp"] if q % 2 else ms["cry"], C.FOREST_R, seed=q + 50, n=6)
             colm.tube([A.ring(p, C.FOREST_R, 8), A.ring((p[0], p[1] + 8, p[2]), C.FOREST_R, 8)], CM, cap0=CM, cap1=CM)
     if k == "bumpers":
         for q, (s, u, r) in enumerate(C.BUMPERS):
@@ -294,16 +343,16 @@ for i in range(1, C.N):
                 for q in range(6 if sb - sa > 20 else 3):
                     f = q / (6 if sb - sa > 20 else 3)
                     s_, u_ = sa + (sb - sa) * f, ua + (ub - ua) * f
-                    pts.append(deck_pt(i, s_, side * (u_ + 0.2)))
-            pts.append(deck_pt(i, C.FUNNEL[-1][0], side * (C.FUNNEL[-1][1] + 0.2)))
-            rail_along(pts, ms["cryp"] if side < 0 else ms["cry"], seed=i * 3 + side)
+                    pts.append(deck_pt(i, s_, side * u_))          # on the line the marbles bounce off (the rail is that thick)
+            pts.append(deck_pt(i, C.FUNNEL[-1][0], side * C.FUNNEL[-1][1]))
+            rail_along(pts, ms["cryp"] if side < 0 else ms["cry"], seed=i * 3 + side, inside=run_center(i))
             glow_line(pts, "f%s" % side, 8.0)
     if k == "split":
         pts = [deck_pt(i, C.SPLIT[0] + (C.SPLIT[1] - C.SPLIT[0]) * q / 20, 0) for q in range(21)]
-        rail_along(pts, ms["cryg"], seed=77)
+        rail_along(pts, ms["cryg"], seed=77, sprout=False)          # marbles run down both sides of it: nothing sprouts
         glow_line(pts, "s", 10.0)
         for s in C.SPLIT:
-            A.crystal_cluster(track, deck_pt(i, s, 0), 5, ms["cryg"], seed=int(s), n=5)
+            A.crystal_spire(track, deck_pt(i, s, 0), 6, ms["cryg"], C.SPLIT_R, seed=int(s), n=4)
     if k == "swamp":
         for q in range(26):
             s = rnd.uniform(4, t1 - t0 - 4); u = rnd.uniform(-HALF + 3, HALF - 3)
@@ -330,7 +379,7 @@ for i in range(1, C.N):
             for u in (-24, -8, 8, 24):
                 a = deck_pt(i, s, u - 5, 0.06); b = deck_pt(i, s + 1.2, u, 0.06); cc = deck_pt(i, s, u + 5, 0.06)
                 a2 = deck_pt(i, s + 0.6, u - 5, 0.06); b2 = deck_pt(i, s + 1.8, u, 0.06); c2 = deck_pt(i, s + 0.6, u + 5, 0.06)
-                track.face([a, a2, b2, b], ms["glowg"]); track.face([b, b2, c2, cc], ms["glowg"])
+                face_to(track, [a, a2, b2, b], ms["glowg"], None, (0, 1, 0)); face_to(track, [b, b2, c2, cc], ms["glowg"], None, (0, 1, 0))
 
 
 # ---------------------------------------------------------------- arches + signs over each run
@@ -338,13 +387,14 @@ def sign_arch(i, s, text, c1, c2):
     t0 = C.runspan(i)[0]
     p = rp(i, t0 + s, 0, 0)
     y = hgt(i, t0 + s)
-    W = A.arch(signs, (p[0], 0, p[2]), C.heading_deg(i), 2 * HALF + 10, y + 34, ms, seed=i)
+    SPAN, TOP, LEG = 2 * HALF + 10, y + 34, y + 12
+    W = A.arch(signs, (p[0], 0, p[2]), C.heading_deg(i), SPAN, TOP, ms, seed=i, leg=LEG)
     tex4.holo_text("sign4_" + text.replace(" ", "_").lower(), text, c1=c1, c2=c2)
     sm = mat("sign4_" + text, "sign4_" + text.replace(" ", "_").lower(), emit=2.0, rough=0.4)
     A.text_panel(signs, (p[0], y + 22, p[2]), C.heading_deg(i) + 180, 40, 6.25, sm, curve=1.2)
     # the panel hangs from the arch on two glowing cords
     for u in (-17, 17):
-        a = rp(i, t0 + s, u, y + 25.1); b = rp(i, t0 + s, u * 0.75, y + 34 - 2.5 * (1 - (u / 40) ** 2))
+        a = rp(i, t0 + s, u, y + 25.1); b = rp(i, t0 + s, u * 0.75, A.arch_y(SPAN, TOP, LEG, u * 0.75) - 0.8)
         signs.sweep([a, b], [(0.12 * math.cos(k / 4 * 6.283), 0.12 * math.sin(k / 4 * 6.283)) for k in range(4)], ms["glowg"])
     for sd in (-1, 1):
         q = rp(i, t0 + s, sd * (HALF + 5), 0)
@@ -356,13 +406,14 @@ for i in range(1, C.N):
     sign_arch(i, 12 if C.KIND[i] not in ("tunnel",) else 2, C.RUNS[i], *PAL[i % len(PAL)])
 # the lift
 tex4.holo_text("sign4_lift", "LIFT HILL", c1="#ffd36b", c2="#ff7a2e")
-W = A.arch(signs, (0, 0, 40), 0, 2 * HALF + 10, C.height(0, 40) + 30, ms, seed=99)
-A.text_panel(signs, (0, C.height(0, 40) + 19, 40), 180, 40, 6.25, mat("sign4_lift", "sign4_lift", emit=2.0), curve=1.2)
+_h40 = vis_h(0, 40)
+W = A.arch(signs, (0, 0, 40), 0, 2 * HALF + 10, _h40 + 34, ms, seed=99, leg=_h40 + 12)
+A.text_panel(signs, (0, _h40 + 22, 40), 180, 40, 6.25, mat("sign4_lift", "sign4_lift", emit=2.0), curve=1.2)
 
 # ---------------------------------------------------------------- the finish
 fz = C.finish = C.run_point(C.N - 1, C.FINISH_T, 0, 0)
-A.arch(signs, (0, 0, fz[2]), 0, 2 * HALF + 14, 40, ms, seed=123)
-A.arch(signs, (0, 0, fz[2] + 3), 0, 2 * HALF + 12, 36, ms, seed=124)
+A.arch(signs, (0, 0, fz[2]), 0, 2 * HALF + 14, 40, ms, seed=123, leg=12)
+A.arch(signs, (0, 0, fz[2] + 3), 0, 2 * HALF + 12, 36, ms, seed=124, leg=12)
 tex4.holo_text("sign4_finish", "FINISH", c1="#ffffff", c2="#ffd36b")
 A.text_panel(signs, (0, 26, fz[2]), 180, 34, 8, mat("sign4_finish", "sign4_finish", emit=2.4), curve=1.5)
 for sd in (-1, 1):
@@ -373,7 +424,7 @@ tex4.holo_text("sign4_title", "THE GRAND MARBLE RUN", w=1600, h=190, c1="#5ff2ff
 tex4.holo_text("sign4_walkin", "WALK IN - PICK YOUR MARBLE", w=1600, h=160, c1="#ffd36b", c2="#ffffff")
 tex4.holo_text("sign4_control", "RACE CONTROL", w=1024, h=270, c1="#ffd36b", c2="#ff7a2e", sub="CLICK - TYPE THE CODE")
 tex4.holo_text("sign4_standings", "STANDINGS", w=1024, h=160, c1="#5ff2ff", c2="#ffd36b")
-A.arch(station, (0, 0, -12), 0, 2 * HALF + 16, 34, ms, seed=7)
+A.arch(station, (0, 0, -12), 0, 2 * HALF + 16, 34, ms, seed=7, leg=12)
 A.text_panel(station, (0, 22, -12), 180, 58, 6.8, mat("sign4_title", "sign4_title", emit=2.2), curve=1.8)
 A.text_panel(station, (0, 15.5, -12), 180, 40, 3.9, mat("sign4_walkin", "sign4_walkin", emit=2.0), curve=1.0)
 for sd in (-1, 1):
@@ -437,6 +488,10 @@ def out(name, me):
     o = me.obj(name)
     print(name, tris([o]), "tris")
     export(name, [o])
+FLOORS = [ms["deck"], ms["lift"], swamp_m, ms["checker"], ms["bowl"], ms["leafg"]]
+track.orient_up(FLOORS)
+track.orient_away([ms["hull"]], FLOORS, radius=12.0)
+station.orient_up([ms["tiles"]])
 out("mr4_track", track)
 out("mr4_struct", struct)
 out("mr4_signs", signs)
@@ -459,7 +514,8 @@ xs = [GX0 + STEP * q for q in range(int((GX1 - GX0) / STEP) + 1)]
 zs = [GZ0 + STEP * q for q in range(int((GZ1 - GZ0) / STEP) + 1)]
 P = [[(x, terrain(x, z), z) for x in xs] for z in zs]
 UV = [[(x / 60, z / 60) for x in xs] for z in zs]
-g.grid(P, ms["moss"], UV, flip=True)
+g.grid(P, ms["moss"], UV)
+g.orient_up([ms["moss"]])
 gob = g.obj("ground")
 export("mr4_ground", [gob])
 print("ground", tris([gob]), "tris")

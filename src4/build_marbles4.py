@@ -136,7 +136,8 @@ for k in range(C.LANES):
     x = C.lane_off(k)
     tex4.holo_text("bridge4_" + C.NAMES[k].lower(), C.NAMES[k], w=1024, h=256, c1=C.COLORS[k], c2="#ffffff")
     lm = mat("bridge4_" + C.NAMES[k], "bridge4_" + C.NAMES[k].lower(), emit=2.0)
-    me.face([(x - 3, 1.32, -6.9), (x + 3, 1.32, -6.9), (x + 3, 1.32, -5.4), (x - 3, 1.32, -5.4)][::-1], lm, [(0, 0), (1, 0), (1, 1), (0, 1)][::-1])
+    # (reads the right way walking from the station towards the marbles)
+    me.face([(x - 3, 1.32, -6.9), (x + 3, 1.32, -6.9), (x + 3, 1.32, -5.4), (x - 3, 1.32, -5.4)][::-1], lm, [(1, 0), (0, 0), (0, 1), (1, 1)][::-1])
     me.sweep([(x - 3.3, 1.26, -2.55), (x + 3.3, 1.26, -2.55)], [(0.12 * math.cos(j / 6 * 6.283), 0.06 * math.sin(j / 6 * 6.283)) for j in range(6)], mat("bridgelane_" + C.NAMES[k], color=C.COLORS[k], emit=3.0), caps=ms["glowc"])
 # a glowing handrail along the back so nobody steps off behind
 rail = [(-x0 + 2 * x0 * q / 40, 2.3 + 0.08 * math.sin(q * 0.7), -7.3) for q in range(41)]
@@ -144,5 +145,7 @@ me.sweep(rail, [(0.12 * math.cos(j / 6 * 6.283), 0.12 * math.sin(j / 6 * 6.283))
 for q in range(0, 41, 4):
     p = rail[q]
     me.sweep([(p[0], 1.2, -7.3), (p[0], p[1], -7.3)], [(0.08 * math.cos(j / 6 * 6.283), 0.08 * math.sin(j / 6 * 6.283)) for j in range(6)], ms["gold"])
+me.orient_up([walk] + [m_ for m_ in me.mats if m_.name.startswith("bridge4_")])
+me.orient_away([ms["hull"]], [walk], radius=8.0)
 export("mr4_bridge", [me.obj("bridge")])
 print("marbles done")

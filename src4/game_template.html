@@ -93,7 +93,7 @@
   const CANCEL_WINDOW = 10000;
   const LIGHT = 1;
 
-  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/0a81f0975a040f91417552cd2b1ed9bb501cb4ac/models4/";   // pinned to one upload: never an old copy
+  const BASE = "https://raw.githubusercontent.com/dinopawnz/marblerun/8ee1dc66dcfe7cb2c511ede690ef1ed08ae86425/models4/";   // pinned to one upload: never an old copy
   const M = (n) => BASE + n + ".glb.gz";
 
   // the course, built in Blender from the same numbers (course.py in the repo)
@@ -187,14 +187,15 @@
   let marbles = [];
   const RIDERS = [];              // per marble: who is standing in it (connection id -> last seen)
   // the room riders stand in: a floor, four walls (the one facing the station is the door) and a lid
-  const DOOR = 2;
+  const DOOR = 4;                 // (of 8 sides: the one facing the station)
   // the room is a tall shaft, its lid far overhead: over the crest of the lift and down the drops the
   // floor falls away faster than riders do, so they float up - with nothing low above them to hit,
   // they just drift up inside the invisible walls and land back on the floor
   const ROOM_TOP = 36;
   function side(i) {
-    const a = i * 90, r = a * Math.PI / 180, rc = 2.9 + 0.5;
-    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP - 0.4 + ROOM_TOP) / 2, ry: a, width: 7.8, height: ROOM_TOP - (FLOOR_TOP - 0.4), depth: 1 };
+    // an eight-sided room that fits the round glass (in a square one, riders in a corner stood outside the bubble)
+    const a = i * 45, r = a * Math.PI / 180, rc = 2.9 + 0.5;
+    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP - 0.4 + ROOM_TOP) / 2, ry: a, width: 2 * (rc + 0.5) * Math.tan(Math.PI / 8) + 0.1, height: ROOM_TOP - (FLOOR_TOP - 0.4), depth: 1 };
   }
   // value of a coordinate at time t from its knots [[t, v], ...]
   function knotAt(K, t) {
@@ -292,7 +293,7 @@
     const touch = (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.set(id, Date.now()); };
     on(floor, "collisionstart", touch); on(floor, "collisionmove", touch);
     on(floor, "collisionend", (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.delete(id); });
-    for (let i = 0; i < 4; i++) if (i !== DOOR) solid(side(i), pod);
+    for (let i = 0; i < 8; i++) if (i !== DOOR) solid(side(i), pod);
     solid({ y: ROOM_TOP + 0.3, width: 7.8, height: 0.6, depth: 7.8 }, pod);
     if (doorsShut) c.door = solid(side(DOOR), pod);
     addMusic(c, c.look ? MUSIC_VOL : 0);

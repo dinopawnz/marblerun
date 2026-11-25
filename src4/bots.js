@@ -27,7 +27,7 @@ const ctx = { window: win, document, Date: { now: () => clock }, Math, String, N
   clearTimeout(id) { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); }, clearInterval() {} };
 // the physics really takes time on the server: charge 400 ms per simulated race to the fake clock
 vm.createContext(ctx);
-vm.runInContext(script + ";globalThis.X={get plan(){return plan},get phase(){return phase},marbles:()=>marbles,COURSE,WORLD,boards,get errs(){return scriptErrors+' '+lastError},progress,bridge,HOST,get REMOTES(){return REMOTES},RIDERS,liveAnims,knotAt,fx};", ctx);
+vm.runInContext(script + ";globalThis.X={ROOM_TOP,get plan(){return plan},get phase(){return phase},marbles:()=>marbles,COURSE,WORLD,boards,get errs(){return scriptErrors+' '+lastError},progress,bridge,HOST,get REMOTES(){return REMOTES},RIDERS,liveAnims,knotAt,fx};", ctx);
 const X = ctx.X, C = X.COURSE;
 function advance(ms) {
   const end = clock + ms;
@@ -97,16 +97,16 @@ function solidsOf(k) {
   const out = [];
   X.marbles()[k].forEach((c) => { if (!c.parts) return; c.pod.children.forEach((s) => {
     if (s.attrs.collide !== "true") return;
-    const p = screenPos(s); const ry = +(s.attrs.ry || 0); const sw = Math.abs(Math.round(ry / 90)) % 2 === 1;
+    const p = screenPos(s); const ry = +(s.attrs.ry || 0) * Math.PI / 180;
     if (s.tagName === "M-CYLINDER") { out.push({ c: p, cyl: +s.attrs.radius, hy: +s.attrs.height / 2, floor: !!s.attrs["collision-interval"], chain: c }); return; }
     const w = +s.attrs.width, d = +s.attrs.depth, h = +s.attrs.height;
     if (!(w > 0 && d > 0 && h > 0)) throw new Error("solid without a size: " + s.tagName);
-    out.push({ c: p, hx: (sw ? d : w) / 2, hy: h / 2, hz: (sw ? w : d) / 2, floor: !!s.attrs["collision-interval"], chain: c });
+    out.push({ c: p, hx: w / 2, hy: h / 2, hz: d / 2, ca: Math.cos(ry), sa: Math.sin(ry), floor: !!s.attrs["collision-interval"], chain: c });
   }); });
   return out;
 }
 const kinds = ["grip", "slip", "jump"];
-const starts = [[0, 0], [2.4, 2.4], [-2.4, -2.4], [2.4, -2.4], [-2.4, 2.4], [0, 2.6]];
+const starts = [[0, 0], [1.6, 1.6], [-1.6, -1.6], [1.6, -1.6], [-1.6, 1.6], [0, 2.3]];
 const bots = [];
 for (let k = 0; k < 8; k++) starts.forEach((s, i) => kinds.forEach((kind) => {
   const f = X.marbles()[k][0].pod; const p = screenPos(f);
@@ -136,15 +136,23 @@ while (clock < endT - 500) {
         let qx, qz;
         const qy = Math.max(s.c[1] - s.hy, Math.min(b.y, s.c[1] + s.hy));
         if (s.cyl) { const ex = b.x - s.c[0], ez = b.z - s.c[2], e = Math.hypot(ex, ez), f = e > s.cyl ? s.cyl / e : 1; qx = s.c[0] + ex * f; qz = s.c[2] + ez * f; }
-        else { qx = Math.max(s.c[0] - s.hx, Math.min(b.x, s.c[0] + s.hx)); qz = Math.max(s.c[2] - s.hz, Math.min(b.z, s.c[2] + s.hz)); }
+        else {
+          const wx = b.x - s.c[0], wz = b.z - s.c[2];
+          const lx = wx * s.ca - wz * s.sa, lz = wx * s.sa + wz * s.ca;           // into the box's frame
+          const cx = Math.max(-s.hx, Math.min(lx, s.hx)), cz = Math.max(-s.hz, Math.min(lz, s.hz));
+          qx = s.c[0] + cx * s.ca + cz * s.sa; qz = s.c[2] - cx * s.sa + cz * s.ca;  // and back
+        }
         let dx = b.x - qx, dy = b.y - qy, dz = b.z - qz, d = Math.hypot(dx, dy, dz);
         if (d >= R) return;
         if (d < 1e-6 && s.cyl) { const ex = b.x - s.c[0], ez = b.z - s.c[2]; const up = s.c[1] + s.hy - b.y + R, side = s.cyl - Math.hypot(ex, ez) + R;
           if (up < side) { b.y += up; dx = 0; dy = 1; dz = 0; } else { const e = Math.hypot(ex, ez) || 1; b.x += ex / e * side; b.z += ez / e * side; dx = ex / e; dy = 0; dz = ez / e; } d = 1; }
-        else if (d < 1e-6) {          // centre inside the box: push out the shortest way
-          const opts = [[s.c[0] + s.hx - b.x + R, 1, 0, 0], [b.x - (s.c[0] - s.hx) + R, -1, 0, 0], [s.c[1] + s.hy - b.y + R, 0, 1, 0], [b.y - (s.c[1] - s.hy) + R, 0, -1, 0], [s.c[2] + s.hz - b.z + R, 0, 0, 1], [b.z - (s.c[2] - s.hz) + R, 0, 0, -1]];
+        else if (d < 1e-6) {          // centre inside the box: push out the shortest way (in the box's frame)
+          const wx = b.x - s.c[0], wz = b.z - s.c[2];
+          const lx = wx * s.ca - wz * s.sa, lz = wx * s.sa + wz * s.ca;
+          const opts = [[s.hx - lx + R, 1, 0, 0], [lx + s.hx + R, -1, 0, 0], [s.c[1] + s.hy - b.y + R, 0, 1, 0], [b.y - (s.c[1] - s.hy) + R, 0, -1, 0], [s.hz - lz + R, 0, 0, 1], [lz + s.hz + R, 0, 0, -1]];
           opts.sort((a, c) => a[0] - c[0]); const o = opts[0];
-          b.x += o[1] * o[0]; b.y += o[2] * o[0]; b.z += o[3] * o[0]; dx = o[1]; dy = o[2]; dz = o[3]; d = 1;
+          const nwx = o[1] * s.ca + o[3] * s.sa, nwz = -o[1] * s.sa + o[3] * s.ca;
+          b.x += nwx * o[0]; b.y += o[2] * o[0]; b.z += nwz * o[0]; dx = nwx; dy = o[2]; dz = nwz; d = 1;
         } else { const push = R - d; b.x += dx / d * push; b.y += dy / d * push; b.z += dz / d * push; }
         const nx = dx / d, ny = dy / d, nz = dz / d;
         // the surface's own velocity (all solids of a marble move together)
@@ -157,9 +165,9 @@ while (clock < endT - 500) {
       });
       // still inside its marble?
       const c = fl.c, rx = b.x - c[0], ry_ = b.y - c[1], rz = b.z - c[2];
-      const rel = Math.max(Math.abs(rx), Math.abs(rz));
+      const rel = Math.hypot(rx, rz);
       b.maxRel = Math.max(b.maxRel, rel);
-      if (!isFinite(b.x + b.y + b.z) || rel > 3.6 || ry_ < 0.3 || ry_ > 7.6) b.out = { t: ((clock - P.tLift) / 1000).toFixed(1), rel: [rx.toFixed(2), ry_.toFixed(2), rz.toFixed(2)] };
+      if (!isFinite(b.x + b.y + b.z) || rel > 3.4 || ry_ < 0.3 || ry_ > X.ROOM_TOP + 0.5) b.out = { t: ((clock - P.tLift) / 1000).toFixed(1), rel: [rx.toFixed(2), ry_.toFixed(2), rz.toFixed(2)] };
     });
   }
 }

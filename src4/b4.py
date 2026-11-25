@@ -94,7 +94,7 @@ class Mesh:
                     q, u = q[::-1], u[::-1]
                 self.face(q, m, u)
 
-    def tube(self, rings, m, vrep=1.0, urep=1.0, cap0=None, cap1=None):
+    def tube(self, rings, m, vrep=1.0, urep=1.0, cap0=None, cap1=None, auto=True):
         """rings: list of closed point loops (same count); quads between consecutive loops, normals outward"""
         n = len(rings[0])
         L = [0.0]
@@ -102,15 +102,32 @@ class Mesh:
             ca = Vector(sum((Vector(p) for p in a), Vector()) / n); cb = Vector(sum((Vector(p) for p in b), Vector()) / n)
             L.append(L[-1] + (cb - ca).length)
         tot = max(L[-1], 1e-6)
+        # faces always point OUT of the tube (Otherside draws one side only): if the first quad faces the
+        # tube's axis, every ring is walked the other way round
+        def _out(rs):
+            vote = 0.0
+            for i in range(len(rs) - 1):
+                ca = (sum((Vector(p) for p in rs[i]), Vector()) + sum((Vector(p) for p in rs[i + 1]), Vector())) / (2 * n)
+                for j in range(n):
+                    q = [Vector(rs[i][j]), Vector(rs[i][(j + 1) % n]), Vector(rs[i + 1][(j + 1) % n]), Vector(rs[i + 1][j])]
+                    nm = (q[1] - q[0]).cross(q[3] - q[0]) + (q[3] - q[2]).cross(q[1] - q[2])
+                    vote += nm.dot((q[0] + q[1] + q[2] + q[3]) / 4 - ca)
+            return vote >= 0
+        if auto and not _out(rings):
+            rings = [[r[0]] + r[1:][::-1] for r in rings]
         for i in range(len(rings) - 1):
             for j in range(n):
                 j2 = (j + 1) % n
                 q = [rings[i][j], rings[i][j2], rings[i + 1][j2], rings[i + 1][j]]
                 u = [(j / n * urep, L[i] / tot * vrep), ((j + 1) / n * urep, L[i] / tot * vrep), ((j + 1) / n * urep, L[i + 1] / tot * vrep), (j / n * urep, L[i + 1] / tot * vrep)]
                 self.face(q, m, u)
-        for ring, cm, rev in ((rings[0], cap0, True), (rings[-1], cap1, False)):
+        for ring, nxt, cm in ((rings[0], rings[1] if len(rings) > 1 else rings[0], cap0), (rings[-1], rings[-2] if len(rings) > 1 else rings[-1], cap1)):
             if cm:
                 c = tuple(sum(p[k] for p in ring) / n for k in range(3))
+                cn = Vector(tuple(sum(p[k] for p in nxt) / n for k in range(3)))
+                # a cap faces away from the rest of the tube
+                t0 = [Vector(c), Vector(ring[0]), Vector(ring[1 % n])]
+                rev = ((t0[1] - t0[0]).cross(t0[2] - t0[0])).dot(Vector(c) - cn) < 0
                 for j in range(n):
                     tri = [c, ring[j], ring[(j + 1) % n]]
                     self.face(tri[::-1] if rev else tri, cm, [(0.5, 0.5), (0.5 + 0.5 * math.cos(j / n * 6.283), 0.5 + 0.5 * math.sin(j / n * 6.283)), (0.5 + 0.5 * math.cos((j + 1) / n * 6.283), 0.5 + 0.5 * math.sin((j + 1) / n * 6.283))])
@@ -127,7 +144,7 @@ class Mesh:
                 rr = r * (1 + wobble * (math.sin(a * 3 + ph[0] + y * 0.7) * 0.6 + math.sin(a * 5 + ph[1]) * 0.4))
                 ring.append((c[0] + rr * math.sin(a), c[1] + y, c[2] + rr * math.cos(a)))
             rings.append(ring)
-        self.tube(rings, m, vrep, urep)
+        self.tube(rings, m, vrep, urep, auto=False)
 
     def sweep(self, path, shape, m, up=(0, 1, 0), scale=None, vrep=1.0, urep=1.0, caps=None, twist=0.0):
         """sweep a closed 2D shape [(sx, sy)] along a 3D path (MML coords)"""
@@ -154,8 +171,47 @@ class Mesh:
         cy, sy = math.cos(math.radians(ry)), math.sin(math.radians(ry))
         P = lambda x, y, z: (c[0] + x * cy + z * sy, c[1] + y, c[2] - x * sy + z * cy)
         v = [P(-hx, -hy, -hz), P(hx, -hy, -hz), P(hx, -hy, hz), P(-hx, -hy, hz), P(-hx, hy, -hz), P(hx, hy, -hz), P(hx, hy, hz), P(-hx, hy, hz)]
-        for q in ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (2, 3, 7, 6), (1, 2, 6, 5), (3, 0, 4, 7)):
+        for q in ((0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (2, 6, 7, 3), (1, 5, 6, 2), (3, 7, 4, 0)):     # outward
             self.face([v[i] for i in q], m, [(0, 0), (uvs, 0), (uvs, uvs), (0, uvs)])
+
+    def _normal(self, fi):
+        P = [Vector(self.v[i]) for i in self.f[fi]]
+        nm = Vector((0, 0, 0))
+        for a in range(len(P)):
+            nm += P[a].cross(P[(a + 1) % len(P)])
+        return nm, sum(P, Vector()) / len(P)
+
+    def _flip(self, fi):
+        self.f[fi] = self.f[fi][::-1]
+        self.uv[fi] = self.uv[fi][::-1]
+
+    def orient_up(self, mats):
+        """every face of these materials points up (floors, decks)"""
+        ids = {self.mats.index(m) for m in mats if m in self.mats}
+        for fi, mi in enumerate(self.m):
+            if mi in ids and self._normal(fi)[0].y < 0:
+                self._flip(fi)
+
+    def orient_away(self, mats, ref_mats, radius=10.0):
+        """every face of these materials points away from the nearby faces of ref_mats (the underside of a deck)"""
+        import numpy as np
+        from scipy.spatial import cKDTree
+        ids = {self.mats.index(m) for m in mats if m in self.mats}
+        rids = {self.mats.index(m) for m in ref_mats if m in self.mats}
+        refs = np.array([tuple(self._normal(fi)[1]) for fi, mi in enumerate(self.m) if mi in rids])
+        if not len(refs):
+            return
+        tree = cKDTree(refs)
+        for fi, mi in enumerate(self.m):
+            if mi not in ids:
+                continue
+            nm, c = self._normal(fi)
+            near = tree.query_ball_point(tuple(c), radius)
+            if not near:
+                near = [tree.query(tuple(c))[1]]
+            r = Vector(tuple(refs[near].mean(0)))
+            if nm.dot(r - c) > 0:
+                self._flip(fi)
 
     def obj(self, name, smooth=True, merge=0.0005, auto_smooth=40):
         me = bpy.data.meshes.new(name)
