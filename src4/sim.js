@@ -75,7 +75,7 @@ function simulateRace(C, rnd, lift, tune) {
     if (s.type !== "run") return;
     for (let q = 0; q < s.prof.length - 1; q++) {
       const a = s.prof[q], b = s.prof[q + 1];
-      if (Math.abs(b[0] - a[0]) < 0.01 && a[1] - b[1] > 0.5) s.ledges.push([a[0], a[1]]);
+      if (Math.abs(b[0] - a[0]) < 0.01 && a[1] - b[1] > 0.5) s.ledges.push([a[0], a[1], b[1]]);     // [where, top, bottom]
     }
   });
   function ledge(m) {
@@ -84,7 +84,8 @@ function simulateRace(C, rnd, lift, tune) {
     const t = loc(s, m.x, m.z)[0];
     for (const [te, ye] of s.ledges) {
       const dt = t - te, dy = m.y + MR - ye, d = Math.hypot(dt, dy);
-      if (dt < 0 || dt > MR || d >= MR || d < 1e-6) continue;      // (only ever forward, off the edge)
+      // (centre above the edge and past it: roll round the edge; only ever forward, off the edge)
+      if (dt < 0 || dt > MR || dy <= 0 || d >= MR || d < 1e-6) continue;
       const nt = dt / d, ny = dy / d, push = MR - d;
       m.x += s.d[0] * nt * push; m.z += s.d[1] * nt * push; m.y += ny * push;
       const vt = m.vx * s.d[0] + m.vz * s.d[1], vn = vt * nt + m.vy * ny;
@@ -98,7 +99,8 @@ function simulateRace(C, rnd, lift, tune) {
     if (s.type !== "run" || !s.ledges.length) return;
     const t = loc(s, m.x, m.z)[0];
     for (const [te, ye] of s.ledges) {
-      if (m.y > ye - 0.3 || t >= te + MR || t < te - 30) continue;
+      // a marble whose centre is below the edge, right by the cliff face: the face is a wall
+      if (m.y + MR >= ye || t >= te + MR || t < te - 2 * MR) continue;
       const push = te + MR - t;
       m.x += s.d[0] * push; m.z += s.d[1] * push;
       const vt = m.vx * s.d[0] + m.vz * s.d[1];
