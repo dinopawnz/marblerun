@@ -51,8 +51,8 @@
   Set your spawn point beside the station, around x 60, z -5.
 -->
 
-<m-group id="world"></m-group>
-<m-group id="race"></m-group>
+<m-group id="world" sx="0.6" sy="0.6" sz="0.6"></m-group>
+<m-group id="race" sx="0.6" sy="0.6" sz="0.6"></m-group>
 
 <script>
   // ==========================================================
@@ -80,8 +80,9 @@
   const SIM_TUNE = { gScale: 2.0 };   // the physics (see simulateRace): 1.6 = a lively pace
   const MAX_SPREAD = 95;            // seconds from first to last over the line (races with a bigger gap are re-rolled)
   const MAX_TRIES = 60;
-  const TOL_XZ = 0.6, TOL_Y = 0.15;  // how closely the glides follow the physics (metres)
-  const CHAIN_SECONDS = 8;          // each marble gets a fresh chain of glides this often
+  const TOL_XZ = 1.3, TOL_Y = 0.4;   // how closely the glides follow the physics (metres)
+  const CHAIN_SECONDS = 8;          // (unused since v4.2: no hand-overs)
+  const SLOTS = 320;                // glide slots in each marble's chain (a whole race)
   const HAND_AHEAD = 600, HAND_SOLID = 250, HAND_SWAP = 1200;   // ms: made early, solid, swapped
   // race music inside every marble (an original track, a seamless 96 s loop; src/music.py made it)
   const MUSIC_SRC = "https://raw.githubusercontent.com/dinopawnz/marblerun/5e33302d8e8834cb89feb7024ca22d419434a08d/audio/race_theme.mp3";
@@ -187,9 +188,13 @@
   const RIDERS = [];              // per marble: who is standing in it (connection id -> last seen)
   // the room riders stand in: a floor, four walls (the one facing the station is the door) and a lid
   const DOOR = 2;
+  // the room is a tall shaft, its lid far overhead: over the crest of the lift and down the drops the
+  // floor falls away faster than riders do, so they float up - with nothing low above them to hit,
+  // they just drift up inside the invisible walls and land back on the floor
+  const ROOM_TOP = 36;
   function side(i) {
     const a = i * 90, r = a * Math.PI / 180, rc = 2.9 + 0.5;
-    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP - 0.4 + 7.2) / 2, ry: a, width: 7.8, height: 6.4 + 0.4, depth: 1 };
+    return { x: rc * Math.sin(r), z: rc * Math.cos(r), y: (FLOOR_TOP - 0.4 + ROOM_TOP) / 2, ry: a, width: 7.8, height: ROOM_TOP - (FLOOR_TOP - 0.4), depth: 1 };
   }
   // value of a coordinate at time t from its knots [[t, v], ...]
   function knotAt(K, t) {
@@ -229,8 +234,52 @@
         anims++;
       });
     }
+    // empty slots: the physics glides are added into these once it is worked out (the floor riders
+    // stand on is NEVER replaced during a race - Otherside drops riders when their floor is swapped)
+    const slots = [];
+    if (P) for (let q = 0; q < SLOTS; q++) { g = el("m-group", {}, g); slots.push(g); }
     const pod = el("m-group", {}, g);
-    return { k, root, pod, S, E, anims, parts: false, look: false, door: null, racing: !!P };
+    return { k, root, pod, S, E, anims, parts: false, look: false, door: null, racing: !!P, slots, used: 0 };
+  }
+  // marble k's glides for the roll (after the lift), in time order, one slot each. They are not all
+  // sent at once (every live glide costs frame rate): each is sent LEAD_MS before it starts, and once
+  // it has finished its end point is written onto its slot and the glide is taken away. Nothing a
+  // rider stands on is ever replaced - only empty groups above the floor get a glide or a number.
+  const LEAD_MS = 16000, BAKE_MS = 2000;
+  function fillSlots(c, P) {
+    const K = P.m[c.k].knots, segs = [];
+    ["x", "y", "z"].forEach((ax, j) => {
+      const Kj = K[j];
+      for (let i = 1; i < Kj.length - 1; i++) {          // (segment 0 is the lift, already in the chain)
+        const t0 = Kj[i][0], t1 = Kj[i + 1][0], d = Kj[i + 1][1] - Kj[i][1];
+        if (Math.abs(d) < 0.002 || t1 - t0 < 1) continue;
+        const st = Math.round(P.doc(t0)), en = Math.round(P.doc(t1));
+        segs.push({ ax, st, dur: Math.max(1, en - st), d });
+      }
+    });
+    segs.sort((a, b) => a.st - b.st);
+    c.queue = segs.slice(0, c.slots.length);
+    c.next = 0; c.liveGl = [];
+    return segs.length <= c.slots.length;
+  }
+  function feedSlots(c, upTo, gone) {
+    if (!c.queue) return;
+    // finished glides: their end point stays on the slot, the glide itself goes
+    // (finished glides are KEPT until the race ends: Otherside forgets a number written onto a group
+    //  whose glide is taken away, and the marble would lose that stretch of its path)
+    c.liveGl = c.liveGl.filter((q) => q.st + q.dur > gone);
+    while (c.next < c.queue.length && c.queue[c.next].st <= upTo) {
+      const q = c.queue[c.next];
+      q.slot = c.slots[c.next];
+      q.node = el("m-attr-anim", { attr: q.ax, start: 0, end: q.d, "start-time": q.st, duration: q.dur, easing: "linear", loop: "false" }, q.slot);
+      c.anims++; c.liveGl.push(q); c.next++;
+    }
+  }
+  function feedAll(P) {
+    if (plan !== P) return;
+    const d = docNow();
+    marbles.forEach((list) => list.forEach((c) => feedSlots(c, d + LEAD_MS, d - BAKE_MS)));
+    if (marbles.some((list) => list.some((c) => c.queue && (c.next < c.queue.length || c.liveGl.length)))) at(Date.now() + 1000, () => feedAll(P));
   }
   // the floor, walls and lid riders are held by
   function addSolids(c) {
@@ -244,7 +293,7 @@
     on(floor, "collisionstart", touch); on(floor, "collisionmove", touch);
     on(floor, "collisionend", (e) => { const id = e && e.detail && e.detail.connectionId; if (id !== undefined) seen.delete(id); });
     for (let i = 0; i < 4; i++) if (i !== DOOR) solid(side(i), pod);
-    solid({ y: 7.5, width: 7.8, height: 0.6, depth: 7.8 }, pod);
+    solid({ y: ROOM_TOP + 0.3, width: 7.8, height: 0.6, depth: 7.8 }, pod);
     if (doorsShut) c.door = solid(side(DOOR), pod);
     addMusic(c, c.look ? MUSIC_VOL : 0);
   }
@@ -313,7 +362,7 @@
     marbles.forEach((list) => list.forEach((c) => c.root.remove()));
     marbles = [];
     for (let k = 0; k < N; k++) {
-      const c = buildChain(k, P, P ? P.tLift - 1000 : 0, P ? P.m[k].rel : 0);
+      const c = buildChain(k, P, P ? P.tLift - 1000 : 0, P ? P.m[k].rel + 1 : 0);
       addSolids(c); addLooks(c, P);
       marbles.push([c]);
     }
@@ -380,11 +429,15 @@
       const last = pi < 0 ? sm.samples.length : pi + 1;
       const S = sm.samples.slice(0, Math.max(2, last));
       const ts = S.map((s) => P.tLift + s[0] * 1000);
-      m.knots = [1, 2, 3].map((j) => {
-        const K = fitAxis(ts, S.map((s) => s[j]), j === 2 ? TOL_Y : TOL_XZ);
+      let tol = 1;
+      const fit = () => [1, 2, 3].map((j) => {
+        const K = fitAxis(ts, S.map((s) => s[j]), (j === 2 ? TOL_Y : TOL_XZ) * tol);
         // the lift exactly as the first chain has it, then the roll
         return [[P.tLift, COURSE.homes[k][j - 1]], [m.rel, COURSE.tops[k][j - 1]]].concat(K.filter((q) => q[0] > m.rel + 1));
       });
+      m.knots = fit();
+      const count = () => m.knots.reduce((a, K) => a + K.length - 2, 0);
+      while (count() > SLOTS && tol < 6) { tol *= 1.25; m.knots = fit(); }
       m.park = ts[ts.length - 1];
       m.finish = P.tLift + sm.finish * 1000;
       m.prog = sm.progress;
@@ -550,20 +603,9 @@
       P.tries = tries;
       applySim(P, R);
       scheduleEffects(P);
-      // fresh chains all the way round. The first hand-over is while still on the lift; marbles
-      // take turns, HAND_GAP apart, so no two hand-overs ever overlap.
-      const order = P.m.map((m, k) => k).sort((a, b) => P.m[a].rel - P.m[b].rel);
-      const base = Math.min(...order.map((k, i) => P.m[k].rel - 1500 - HAND_GAP * i));
-      order.forEach((k, i) => {
-        const m = P.m[k];
-        let S = base + HAND_GAP * i;
-        while (S < m.park) {
-          const next = S + CHAIN_SECONDS * 1000, E = next >= m.park ? Infinity : next + HAND_SWAP + 600;
-          const s0 = S;
-          at(s0 - HAND_AHEAD, () => { if (plan === P) handOver(k, P, s0, E); });
-          S = next;
-        }
-      });
+      // every glide of the roll goes into the marble's own chain now, long before the lift lets go
+      for (let k = 0; k < N; k++) fillSlots(marbles[k][0], P);
+      feedAll(P);
       at(P.m[P.winner].finish, () => {
         if (plan !== P) return;
         P.announced = true;
