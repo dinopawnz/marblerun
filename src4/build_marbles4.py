@@ -41,8 +41,7 @@ def ball(name, color):
     tube_ring(me, MR - 0.12, 0.06, glow, (-35, -55))
     tube_ring(me, MR - 0.05, 0.035, white, (0, 90))
     # a small glowing heart in the middle that the rings orbit
-    A.shard(me, (0, -0.9, 0), 1.8, 0.45, glow, sides=6, seed=3, tip=0.5)
-    A.shard(me, (0, 0.9, 0), -1.8, 0.45, glow, sides=6, seed=4, tip=0.5)
+    # (no heart in the middle any more: it blocked the riders' view)
     o = me.obj("ball_" + name)
     print(name, "ball", tris([o]))
     export("mr4_ball_" + name.lower(), [o])
